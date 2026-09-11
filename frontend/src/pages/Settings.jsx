@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { Palette, Database } from "lucide-react";
 import { TemplatesCard } from "@/components/TemplatesCard";
 import { HolidaysCard } from "@/components/HolidaysCard";
+import { DriverTargetsCard } from "@/components/DriverTargetsCard";
 
 export default function Settings() {
   const { theme, setTheme } = useTheme();
@@ -72,6 +73,7 @@ export default function Settings() {
         </CardContent>
       </Card>
 
+      <DriverTargetsCard />
       <TemplatesCard />
       <HolidaysCard />
 

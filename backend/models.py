@@ -31,6 +31,8 @@ class Personnel(BaseModel):
     aciklama: str = ""
     fazla_mesai: bool = False
     surucu_tercihi: SurucuTercihi = "yok"
+    nobet_hedef_1_15: Optional[int] = None   # sadece "surucu" rolü
+    nobet_hedef_16_son: Optional[int] = None
     created_at: str = Field(default_factory=now_iso)
 
 
@@ -42,6 +44,8 @@ class PersonnelCreate(BaseModel):
     aciklama: str = ""
     fazla_mesai: bool = False
     surucu_tercihi: SurucuTercihi = "yok"
+    nobet_hedef_1_15: Optional[int] = None
+    nobet_hedef_16_son: Optional[int] = None
 
 
 class PersonnelUpdate(BaseModel):
@@ -52,6 +56,8 @@ class PersonnelUpdate(BaseModel):
     aciklama: Optional[str] = None
     fazla_mesai: Optional[bool] = None
     surucu_tercihi: Optional[SurucuTercihi] = None
+    nobet_hedef_1_15: Optional[int] = None
+    nobet_hedef_16_son: Optional[int] = None
 
 
 # ---------------- Leave / Request ----------------

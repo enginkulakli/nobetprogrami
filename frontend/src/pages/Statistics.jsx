@@ -82,6 +82,8 @@ export default function Statistics() {
                       <TableHead>Personel</TableHead>
                       <TableHead>Tür</TableHead>
                       <TableHead className="text-right">Nöbet</TableHead>
+                      <TableHead className="text-right" title="Ayın 1–15 arası nöbet / hedef">1–15</TableHead>
+                      <TableHead className="text-right" title="Ayın 16–sonu arası nöbet / hedef">16–Son</TableHead>
                       <TableHead className="text-right">Normal Hedef</TableHead>
                       <TableHead className="text-right">Gerçekleşen</TableHead>
                       <TableHead className="text-right">Eksik</TableHead>
@@ -101,7 +103,9 @@ export default function Statistics() {
                       <TableRow key={s.personel_id} data-testid={`stats-row-${s.personel_id}`}>
                         <TableCell className="font-medium">{s.ad_soyad}</TableCell>
                         <TableCell className="text-xs">{PERSONNEL_LABELS[s.personel_turu]}</TableCell>
-                        <TableCell className="text-right font-mono">{s.toplam_nobet}</TableCell>
+                        <TableCell className="text-right font-mono" data-testid={`toplam-nobet-${s.personel_id}`}>{s.toplam_nobet}</TableCell>
+                        <HalfCell value={s.nobet_1_15} target={s.nobet_hedef_1_15} testid={`nobet-1-15-${s.personel_id}`} />
+                        <HalfCell value={s.nobet_16_son} target={s.nobet_hedef_16_son} testid={`nobet-16-son-${s.personel_id}`} />
                         <TableCell className="text-right font-mono text-muted-foreground" data-testid={`normal-hedef-${s.personel_id}`} title={`${s.hafta_ici_gun} hafta içi gün − ${s.tatil_gun} tatil − ${s.izin_gun} izin`}>{s.normal_hedef}</TableCell>
                         <TableCell className="text-right font-mono" data-testid={`gerceklesen-${s.personel_id}`}>{s.gerceklesen}</TableCell>
                         <TableCell className={`text-right font-mono ${s.eksik_saat > 0 ? "text-orange-600 font-semibold" : "text-muted-foreground"}`} data-testid={`eksik-${s.personel_id}`}>{s.eksik_saat}</TableCell>
@@ -126,5 +130,15 @@ export default function Statistics() {
         </>
       )}
     </div>
+  );
+}
+
+function HalfCell({ value, target, testid }) {
+  const hasTarget = target !== null && target !== undefined;
+  const cls = !hasTarget ? "" : value === target ? "text-green-700 font-semibold" : "text-orange-600 font-semibold";
+  return (
+    <TableCell className={`text-right font-mono ${cls}`} data-testid={testid}>
+      {value}{hasTarget && <span className="text-muted-foreground font-normal">/{target}</span>}
+    </TableCell>
   );
 }

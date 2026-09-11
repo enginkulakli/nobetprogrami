@@ -157,7 +157,7 @@ async def create_personnel(data: PersonnelCreate):
 
 @api_router.patch("/personnel/{pid}", response_model=Personnel)
 async def update_personnel(pid: str, data: PersonnelUpdate):
-    update = {k: v for k, v in data.model_dump().items() if v is not None}
+    update = data.model_dump(exclude_unset=True)
     if not update:
         raise HTTPException(400, "Güncellenecek alan yok")
     res = await db.personnel.update_one({"id": pid}, {"$set": update})
@@ -599,6 +599,10 @@ async def get_stats(yil: int, ay: int):
             "tatil_gun": t["tatil_gun"],
             "izin_gun": t["izin_gun"],
             "fazla_mesai_secili": p.get("fazla_mesai", False),
+            "nobet_1_15": 0,
+            "nobet_16_son": 0,
+            "nobet_hedef_1_15": p.get("nobet_hedef_1_15") if p["personel_turu"] == "surucu" else None,
+            "nobet_hedef_16_son": p.get("nobet_hedef_16_son") if p["personel_turu"] == "surucu" else None,
             "toplam_saat": 0,
             "toplam_nobet": 0,
             "cumartesi": 0,
@@ -618,6 +622,10 @@ async def get_stats(yil: int, ay: int):
         s["toplam_saat"] += a["saat"]
         s["toplam_nobet"] += 1
         d = date.fromisoformat(a["tarih"])
+        if d.day <= 15:
+            s["nobet_1_15"] += 1
+        else:
+            s["nobet_16_son"] += 1
         if a["tarih"] in holidays:
             s["tatil"] += 1
         if d.weekday() == 5:

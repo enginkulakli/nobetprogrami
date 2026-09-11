@@ -91,6 +91,8 @@ class SchedulerContext:
         self.surucu_24_count: Dict[str, int] = {pid: 0 for pid in self.personnel}
         self.saglikci_24_count: Dict[str, int] = {pid: 0 for pid in self.personnel}
         self.holiday_shifts: Dict[str, int] = {pid: 0 for pid in self.personnel}
+        self.half1_shifts: Dict[str, int] = {pid: 0 for pid in self.personnel}
+        self.half2_shifts: Dict[str, int] = {pid: 0 for pid in self.personnel}
 
     def preload_days(self, days: List[dict]):
         """Önceki aydan taşan nöbetleri (istatistik sayılmadan) dinlenme kontrolü için yükler."""
@@ -188,6 +190,10 @@ class SchedulerContext:
             return
         if d.isoformat() in self.holidays:
             self.holiday_shifts[pid] += 1
+        if d.day <= 15:
+            self.half1_shifts[pid] += 1
+        else:
+            self.half2_shifts[pid] += 1
         hrs = int(TASKS[task]["hours"])
         self.hours[pid] += hrs
         self.total_shifts[pid] += 1
@@ -218,6 +224,15 @@ class SchedulerContext:
         if proj_hours > hedef:
             overtime = proj_hours - hedef
             score += 60.0 + overtime * 1.0
+        # 1b2) sürücü rolü için 1-15 / 16-ay sonu nöbet hedefi (soft)
+        if p.get("personel_turu") == "surucu":
+            hedef_half = p.get("nobet_hedef_1_15") if d.day <= 15 else p.get("nobet_hedef_16_son")
+            if hedef_half is not None:
+                cur = self.half1_shifts[pid] if d.day <= 15 else self.half2_shifts[pid]
+                if cur >= hedef_half:
+                    score += 40.0 + (cur - hedef_half) * 10.0
+                else:
+                    score -= (hedef_half - cur) * 4.0
         # 1c) sürücü tercihi (12s / 24s)
         tercih = p.get("surucu_tercihi", "yok")
         if task == "surucu_24" and tercih == "12":
