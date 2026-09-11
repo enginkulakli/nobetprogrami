@@ -1,0 +1,137 @@
+{
+  "theme_strategy": "The application MUST support TWO switchable themes (Modern Light and Health/Emergency). Implement a toggle/switcher in the UI that changes a data attribute on the HTML tag (e.g., data-theme='emergency' vs default).",
+  "typography": {
+    "strategy": "Swiss Brutalist meets Old Money Tech. Professional, data-oriented, maximum legibility.",
+    "fonts": {
+      "headings": "Manrope",
+      "body": "IBM Plex Sans"
+    },
+    "scale": {
+      "h1": "text-3xl sm:text-4xl font-extrabold tracking-tight",
+      "h2": "text-2xl sm:text-3xl font-bold tracking-tight",
+      "h3": "text-xl sm:text-2xl font-bold",
+      "h4": "text-lg font-semibold",
+      "body": "text-sm sm:text-base leading-relaxed",
+      "data_table": "text-sm font-medium tracking-wide font-mono",
+      "overline": "text-xs font-bold uppercase tracking-[0.2em] text-muted-foreground"
+    }
+  },
+  "colors": {
+    "default_modern_light": {
+      "description": "White background with navy blue (lacivert) accents. Clean, professional.",
+      "variables": {
+        "--background": "210 40% 98%",
+        "--foreground": "222.2 84% 4.9%",
+        "--card": "0 0% 100%",
+        "--card-foreground": "222.2 84% 4.9%",
+        "--popover": "0 0% 100%",
+        "--popover-foreground": "222.2 84% 4.9%",
+        "--primary": "222 47% 11%", 
+        "--primary-foreground": "210 40% 98%",
+        "--secondary": "210 40% 96.1%",
+        "--secondary-foreground": "222.2 47.4% 11.2%",
+        "--muted": "210 40% 96.1%",
+        "--muted-foreground": "215.4 16.3% 46.9%",
+        "--accent": "210 40% 96.1%",
+        "--accent-foreground": "222.2 47.4% 11.2%",
+        "--destructive": "0 84.2% 60.2%",
+        "--destructive-foreground": "210 40% 98%",
+        "--border": "214.3 31.8% 91.4%",
+        "--input": "214.3 31.8% 91.4%",
+        "--ring": "222.2 84% 4.9%"
+      }
+    },
+    "emergency_theme": {
+      "description": "Health/Emergency theme with red accents. Urgency, medical focus.",
+      "variables": {
+        "--background": "0 0% 99%",
+        "--foreground": "0 0% 9%",
+        "--card": "0 0% 100%",
+        "--card-foreground": "0 0% 9%",
+        "--popover": "0 0% 100%",
+        "--popover-foreground": "0 0% 9%",
+        "--primary": "346 87% 43%", 
+        "--primary-foreground": "0 0% 100%",
+        "--secondary": "0 0% 96%",
+        "--secondary-foreground": "0 0% 9%",
+        "--muted": "0 0% 96%",
+        "--muted-foreground": "0 0% 45%",
+        "--accent": "346 87% 95%",
+        "--accent-foreground": "346 87% 43%",
+        "--destructive": "0 84.2% 60.2%",
+        "--destructive-foreground": "0 0% 100%",
+        "--border": "0 0% 90%",
+        "--input": "0 0% 90%",
+        "--ring": "346 87% 43%"
+      }
+    },
+    "calendar_status": {
+      "yearly_leave": "bg-green-100 text-green-800 border-green-200 (Green for Izin)",
+      "dont_want_shift": "bg-yellow-100 text-yellow-800 border-yellow-200 (Yellow for Nobet Istemiyor)"
+    }
+  },
+  "visual_enhancers": {
+    "surfaces": "Flat Solid ONLY. No glassmorphism. Medical data must be sharp, clear, and high contrast without refraction or blur.",
+    "borders": "Crisp 1px borders on cards (border-border). No heavy drop shadows. Use subtle shadow-sm for elevation.",
+    "radius": "Rounded-md (6px) or rounded-lg (8px). Keep it sharp and technical, not overly bubbly."
+  },
+  "grids_and_layouts": {
+    "dashboard_bento": "High Density Grid. grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4 or gap-6. Summary cards take col-span-1. Main tables/charts take col-span-2 or col-span-3.",
+    "spacing": "Generous internal padding for reading clarity (p-6 on cards). Tight gap on data tables.",
+    "mobile_first": "Must be highly touch-optimized. Navigation moves to a bottom bar or a clean hamburger sidebar. Tables MUST use horizontal scroll (overflow-x-auto) on mobile."
+  },
+  "components": {
+    "dashboard_cards": "Flat background, 1px subtle border. Contains Total Staff, Selected Month, Shifts Generated, Rule Violations. Add lucide-icons.",
+    "personnel_table": "Dense Shadcn Table. Use IBM Plex Sans. Include column for Roles (Sağlıkçı, Sürücü, Sağlıkçı+Sürücü). Right-align numeric data. Striped rows on hover.",
+    "calendar_requests": "A robust full-month grid. MUST support multi-select (click and drag or tap multiple). Minimum 44px touch targets for mobile. Highlight dates with Green (Yearly Leave) or Yellow (Don't want shift).",
+    "shift_list_table": "Day-by-day table showing Date, Day, 2 Medics + 2 Drivers (or 1x 24h driver). Needs 'Edit' button on each row opening a manual assignment modal. Warning toast/badge if rules are violated (e.g. consecutive shifts without rest).",
+    "stats_charts": "Use Recharts (BarChart for Shift hours/Weekends balance). Solid colors from primary/secondary CSS vars.",
+    "toast_notifications": "Use Sonner. Crucial for algorithm feedback. Slide in from bottom right.",
+    "export_actions": "Primary/Outline buttons for Excel and PDF. Placed in a sticky header on the shift list."
+  },
+  "motion": {
+    "strategy": "Minimal and snappy. Medical dashboards shouldn't wait for animations.",
+    "hover": "Subtle -translate-y-[1px] on cards, background color shifts on buttons.",
+    "transitions": "transition-colors duration-200 ease-in-out for interactive elements. NEVER transition: all."
+  },
+  "print_styles": {
+    "instructions": "MUST include a print stylesheet (@media print). Hide sidebar/navigation, remove shadows, set backgrounds to white, borders to solid black. Ensure the Shift List Table fits on A4 paper."
+  },
+  "accessibility": {
+    "touch_targets": "Min 44x44px for calendar days and action buttons.",
+    "focus": "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2. Never rely solely on color for state.",
+    "contrast": "Ensure text over primary buttons passes WCAG AA."
+  },
+  "icons_and_media": {
+    "icons_library": "lucide-react",
+    "image_urls": {
+      "avatar_1": "https://images.pexels.com/photos/32160037/pexels-photo-32160037.jpeg",
+      "avatar_2": "https://images.pexels.com/photos/8460157/pexels-photo-8460157.jpeg",
+      "avatar_3": "https://images.pexels.com/photos/18788957/pexels-photo-18788957.jpeg"
+    },
+    "usage": "Only use images for mock personnel avatars in the table or dashboard. Otherwise, rely purely on typography and layout."
+  },
+  "instructions_to_main_agent": [
+    "Install and use Manrope and IBM Plex Sans.",
+    "Implement the Theme Switcher. Create a context/store that toggles a 'data-theme' attribute on the document body between 'light' and 'emergency'.",
+    "Use Shadcn UI for Table, Button, Dialog, Select, Sonner.",
+    "The Calendar component must be highly customized to support multi-select drag/tap for leaves, color-coded per the JSON.",
+    "Implement Recharts for the Statistics page.",
+    "For the 'Aylık Nöbet Listesi', include visual indicators (badges or red text) if a manually edited shift violates a rule.",
+    "Ensure 'data-testid' is added to all interactive elements for robust testing.",
+    "DO NOT use transparent backgrounds on headers or overlays. Use solid bg-background.",
+    "Use standard pure HTML/Tailwind structures where Shadcn is too rigid for the dashboard layout.",
+    "Generate dummy data based on Turkish names and '112 Acil' roles (Sağlıkçı, Sürücü, Sağlıkçı+Sürücü) to demonstrate the algorithm."
+  ],
+  "UNIVERSAL_GUIDELINES_FOR_MAIN_AGENT": [
+    "Never use generic centered layouts or simplistic gradients.",
+    "Create depth through z-index and borders, NOT shadows or glassmorphism (especially for this medical dashboard).",
+    "Never apply universal transitions (transition: all).",
+    "Do not add text-align: center to the root App container.",
+    "Use pill-shaped or sharp buttons based on the defined radius.",
+    "Never use Emoji characters as icons; use lucide-react.",
+    "Include hover states and micro-interactions for all interactive elements.",
+    "If a component needs a date picker, use Shadcn calendar.",
+    "Use sonner for toast notifications."
+  ]
+}

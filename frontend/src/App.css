@@ -1,0 +1,4 @@
+/* Component-scoped App styles - intentionally minimal, rely on Tailwind */
+.App {
+    min-height: 100vh;
+}

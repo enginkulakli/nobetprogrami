@@ -1,0 +1,26 @@
+{
+  "summary": "Backend-only smoke test of 112 Nöbet Listesi API against external URL. All 14 requested feature areas verified across 18 discrete checks; 100% pass rate. Seed, personnel CRUD (with leaves cascade delete), leaves bulk/list, schedule generate for 2026-03 (all 31 days filled, success=true, no errors), get schedule, hard constraints (no back-to-back 24h saglikci, driver 12h rest), leave respect in generation, manual rule-violation detection & manual success swap, stats, Excel and PDF exports all working.",
+  "tested_scope": ["backend", "integration"],
+  "passed": [
+    "GET /api/ -> ok",
+    "POST /api/seed/demo -> 10 personnel",
+    "GET /api/personnel -> 10",
+    "POST/PATCH/DELETE /api/personnel + cascade delete of /api/leaves",
+    "POST /api/leaves/bulk (yillik_izin, 3 dates) + GET filter by yil/ay",
+    "POST /api/schedule/generate {2026,3} -> success=true, all 31 days have 2 saglikci + (2 surucu 12h OR 1 surucu_24)",
+    "GET /api/schedule/2026/3 -> exists=true",
+    "Hard constraint: no saglikci back-to-back 24h (verified from assignments)",
+    "Hard constraint: no surucu_gece day1 -> surucu_gunduz day2 (12h rest respected)",
+    "yillik_izin dates excluded from generation for target personnel",
+    "POST /api/schedule/manual violation case -> success:false with 'Kural ihlali: Min 12 saat dinlenme kuralı ihlali'",
+    "POST /api/schedule/manual success -> swap saglikci with eligible other personnel",
+    "GET /api/schedule/2026/3/stats -> per-personnel toplam_saat/toplam_nobet/hafta_sonu/cumartesi/pazar/gunduz/gece present",
+    "GET /api/schedule/2026/3/export/excel -> 200 spreadsheetml (6235 bytes)",
+    "GET /api/schedule/2026/3/export/pdf -> 200 application/pdf (%PDF header, 5378 bytes)"
+  ],
+  "failed": [],
+  "action_items": [],
+  "success_rate": {"backend": "100%", "frontend": "not tested"},
+  "retest_needed": false,
+  "full_testing_deferred": true
+}
