@@ -56,6 +56,9 @@ Türkçe, modern, mobil uyumlu 112 Acil Sağlık Hizmetleri personel nöbet plan
 - ✅ Testing: iteration_5 — backend 12/12, frontend pass
 - ✅ Sürücü nöbet hedefi (yalnızca "surucu" rolü): `nobet_hedef_1_15` / `nobet_hedef_16_son`; Ayarlar > Sürücü Nöbet Hedefleri kartı; scheduler soft skor (hedefe ulaşınca ceza, altındayken bonus); stats `nobet_1_15`, `nobet_16_son` + hedef; İstatistik tablosunda 1–15 / 16–Son sütunları (x/hedef renkli). PATCH personnel artık `exclude_unset` (null ile alan temizlenebilir). Self-test edildi (Hakan 3/9 hedefi tam tutturuldu).
 
+## Bug Fixes
+- 2026-06: "Uncaught runtime errors / removeChild" her sayfada ilk tıklamada → Neden: index.html `lang="en"` iken UI Türkçe olduğu için Chrome otomatik çeviri yapıyor, Google Translate DOM metin düğümlerini değiştiriyor ve React reconciliation kırılıyor. Fix: `<html lang="tr" translate="no" class="notranslate">` + `<meta name="google" content="notranslate">`, başlık "112 Nöbet Listesi". iteration_6 pass.
+
 ## Backlog / Next Actions
 - P2: İstasyon/grup bazlı kurallar
 - P2: Kullanıcı hesabı (multi-user, sonraki faz)

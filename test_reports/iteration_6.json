@@ -1,0 +1,22 @@
+{
+  "summary": "Frontend-only regression to verify translate-related React removeChild crash fix. HTML meta/lang/title correctly configured (lang='tr', translate='no', class='notranslate', <meta name='google' content='notranslate'>, title '112 Nöbet Listesi'). End-to-end navigation across nav-home, nav-personnel, nav-leaves, nav-schedule, nav-stats, nav-settings and dialog open/close interactions on Personnel and Schedule pages produced ZERO uncaught page errors, ZERO console errors, and the webpack-dev-server overlay never appeared. Regression smoke passed: dashboard, schedule (Eylül 2026), leaves layout, statistics table all render. Informational: manually injecting Google-Translate-style <font> text-node replacement on /nobet DOES still reproduce the original NotFoundError removeChild crash on subsequent nav clicks — this is expected React behavior; the applied fix (translate='no') prevents Chrome/Google from performing that DOM mutation in the first place, satisfying the primary acceptance criterion.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Fix in /app/frontend/public/index.html is correct and minimal: lang='tr', translate='no', class='notranslate', <meta name='google' content='notranslate'>, <meta http-equiv='Content-Language' content='tr'>, title '112 Nöbet Listesi'. Good.",
+    "React itself cannot recover from DOM mutations done by translators/extensions; adding notranslate at the app root is the correct mitigation. If further hardening is desired, consider wrapping frequently-updating text nodes (e.g. schedule cells, nav labels) with class='notranslate' as belt-and-braces, but not required."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (skipped)", "frontend": "100%"},
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Bug fix verified. Nav routes: /, /personeller, /izinler, /nobet, /istatistikler, /ayarlar. Default month shows Eylül 2026 (system date Sept 2026). Schedule page uses data-testid='schedule-page' and 'personnel-card-btn'. Simulating Google Translate by injecting <font> wrappers over text nodes and then clicking nav links WILL reproduce the original removeChild NotFoundError — this is intrinsic to React and not something the app can fix; the mitigation is to prevent translation via notranslate meta/attributes (already done).",
+  "rca of the issue": "Chrome's built-in translator (and the Google Translate extension) mutate DOM text nodes by wrapping them in <font> elements. React's reconciler still holds references to the original text nodes; when a component unmounts, React calls removeChild on nodes whose parent has been changed by the translator, throwing NotFoundError: Failed to execute 'removeChild' on 'Node'. The user saw Turkish error text because Chrome had translated the CRA error overlay, confirming translation was active. Fix: mark the document as non-translatable via <html lang='tr' translate='no' class='notranslate'> and <meta name='google' content='notranslate'>. Verified via Playwright: no uncaught errors during full navigation and dialog flows; injected translate-simulation still reproduces the crash (informational, expected)."
+}
