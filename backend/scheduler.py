@@ -12,6 +12,14 @@ import random
 from models import Assignment, ShiftDay, MonthlySchedule
 
 
+SLOT_TO_TASK = {
+    "saglikci_1": "saglikci_24",
+    "saglikci_2": "saglikci_24",
+    "surucu_gunduz": "surucu_gunduz",
+    "surucu_gece": "surucu_gece",
+    "surucu_24": "surucu_24",
+}
+
 # Task definitions
 TASKS = {
     "saglikci_24":   {"start": "08:00", "end": "08:00", "hours": 24},
@@ -48,10 +56,12 @@ def _task_datetime_range(d: date, task: str) -> Tuple[float, float]:
 
 class SchedulerContext:
     """Tracks state during generation for hard-constraint checking & soft balancing."""
-    def __init__(self, personnel: List[dict], leaves: Dict[str, Dict[str, str]]):
+    def __init__(self, personnel: List[dict], leaves: Dict[str, Dict[str, str]],
+                 holidays: Optional[set] = None):
         # personnel: list of dicts with id, personel_turu, aktif, hedef_saat, ad_soyad
         self.personnel = {p["id"]: p for p in personnel if p.get("aktif", True)}
         self.leaves = leaves  # {pid: {date_iso: status}}
+        self.holidays = holidays or set()  # iso date strings
         # per-personnel tracking
         self.pid_assignments: Dict[str, List[Tuple[date, str, float, float]]] = {
             pid: [] for pid in self.personnel
@@ -65,6 +75,15 @@ class SchedulerContext:
         self.gece_count: Dict[str, int] = {pid: 0 for pid in self.personnel}
         self.surucu_24_count: Dict[str, int] = {pid: 0 for pid in self.personnel}
         self.saglikci_24_count: Dict[str, int] = {pid: 0 for pid in self.personnel}
+        self.holiday_shifts: Dict[str, int] = {pid: 0 for pid in self.personnel}
+
+    def preload_days(self, days: List[dict]):
+        """Önceki aydan taşan nöbetleri (istatistik sayılmadan) dinlenme kontrolü için yükler."""
+        for day in days:
+            for slot, task in SLOT_TO_TASK.items():
+                pid = day.get(slot)
+                if pid and pid in self.personnel:
+                    self.assign(pid, date.fromisoformat(day["tarih"]), task, count_stats=False)
 
     # ---------- hard constraint checks ----------
     def can_assign(self, pid: str, d: date, task: str, max_gun_asiri: int = 3) -> Tuple[bool, str]:
@@ -142,9 +161,13 @@ class SchedulerContext:
 
         return True, ""
 
-    def assign(self, pid: str, d: date, task: str):
+    def assign(self, pid: str, d: date, task: str, count_stats: bool = True):
         s, e = _task_datetime_range(d, task)
         self.pid_assignments[pid].append((d, task, s, e))
+        if not count_stats:
+            return
+        if d.isoformat() in self.holidays:
+            self.holiday_shifts[pid] += 1
         hrs = int(TASKS[task]["hours"])
         self.hours[pid] += hrs
         self.total_shifts[pid] += 1
@@ -176,6 +199,9 @@ class SchedulerContext:
         # 3) hafta sonu dengesi
         if d.weekday() >= 5:
             score += self.weekend_shifts[pid] * 3.0
+        # 3b) resmi tatil dengesi
+        if d.isoformat() in self.holidays:
+            score += self.holiday_shifts[pid] * 4.0
         # 4) gündüz/gece dengesi
         if task == "surucu_gunduz":
             score += self.gunduz_count[pid] * 1.5
@@ -210,11 +236,14 @@ def generate_schedule(
     personnel: List[dict],
     leaves: Dict[str, Dict[str, str]],
     max_gun_asiri: int = 3,
+    holidays: Optional[set] = None,
+    carryover_days: Optional[List[dict]] = None,
 ) -> Tuple[MonthlySchedule, List[str]]:
     """
     Returns (MonthlySchedule, errors). errors non-empty means partial/failed.
     """
-    ctx = SchedulerContext(personnel, leaves)
+    ctx = SchedulerContext(personnel, leaves, holidays)
+    ctx.preload_days(carryover_days or [])
     days = _iter_days(yil, ay)
     schedule = MonthlySchedule(yil=yil, ay=ay, gunler=[], assignments=[])
     errors: List[str] = []
@@ -304,19 +333,15 @@ def validate_manual_assignment(
     new_pid: Optional[str],
     personnel: List[dict],
     leaves: Dict[str, Dict[str, str]],
+    carryover_days: Optional[List[dict]] = None,
 ) -> Tuple[bool, str]:
     """Validates changing a single slot manually against all hard rules."""
     if new_pid is None:
         return True, ""
     # rebuild context up to this schedule
     ctx = SchedulerContext(personnel, leaves)
-    slot_to_task = {
-        "saglikci_1": "saglikci_24",
-        "saglikci_2": "saglikci_24",
-        "surucu_gunduz": "surucu_gunduz",
-        "surucu_gece": "surucu_gece",
-        "surucu_24": "surucu_24",
-    }
+    ctx.preload_days(carryover_days or [])
+    slot_to_task = SLOT_TO_TASK
     task_new = slot_to_task[slot]
     from datetime import date as _d
     dt_new = _d.fromisoformat(tarih)

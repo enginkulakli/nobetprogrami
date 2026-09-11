@@ -9,16 +9,19 @@ import logging
 from pathlib import Path
 from typing import List, Optional
 from calendar import monthrange
-from datetime import date
+from datetime import date, timedelta
+import random
 
 from models import (
     Personnel, PersonnelCreate, PersonnelUpdate,
     LeaveRequest, LeaveBulkSet,
     MonthlySchedule, GenerateRequest, ManualUpdateRequest,
+    HolidayCreate, Holiday, CarryoverSet, TemplateCreate, Template, TemplateApply,
     new_id, now_iso,
 )
 from scheduler import generate_schedule, validate_manual_assignment, TASKS
 from seed import DEMO_PERSONNEL
+from holidays import official_holidays
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -56,6 +59,54 @@ async def build_leaves_map(ignore_ids: Optional[List[str]] = None) -> dict:
         pid = d["personel_id"]
         leaves.setdefault(pid, {})[d["tarih"]] = d["durum"]
     return leaves
+
+
+async def get_holidays(yil: int) -> List[dict]:
+    out = official_holidays(yil)
+    custom = await db.holidays.find({"tarih": {"$regex": f"^{yil:04d}"}}, {"_id": 0}).to_list(1000)
+    out += [{"tarih": c["tarih"], "ad": c["ad"], "kaynak": "ozel", "id": c["id"]} for c in custom]
+    return sorted(out, key=lambda h: h["tarih"])
+
+
+def prev_month(yil: int, ay: int):
+    return (yil - 1, 12) if ay == 1 else (yil, ay - 1)
+
+
+async def get_carryover(yil: int, ay: int) -> dict:
+    py, pm = prev_month(yil, ay)
+    prev = await db.schedules.find_one({"yil": py, "ay": pm}, {"_id": 0})
+    if prev and prev.get("gunler"):
+        return {"kaynak": "onceki_liste", "gunler": prev["gunler"][-3:], "onceki_yil": py, "onceki_ay": pm}
+    manual = await db.carryover.find_one({"yil": yil, "ay": ay}, {"_id": 0})
+    if manual and manual.get("gunler"):
+        return {"kaynak": "manuel", "gunler": manual["gunler"], "onceki_yil": py, "onceki_ay": pm}
+    return {"kaynak": "yok", "gunler": [], "onceki_yil": py, "onceki_ay": pm}
+
+
+def _conflict_dates(errors: List[str]) -> set:
+    out = set()
+    for e in errors:
+        try:
+            d = date.fromisoformat(e[:10])
+        except ValueError:
+            continue
+        for off in (-1, 0, 1):
+            out.add((d + timedelta(days=off)).isoformat())
+    return out
+
+
+async def find_conflicts(errors: List[str], ignored: List[str], pmap: dict) -> List[dict]:
+    dates = _conflict_dates(errors)
+    if not dates:
+        return []
+    docs = await db.leaves.find({"tarih": {"$in": sorted(dates)}}, {"_id": 0}).to_list(1000)
+    out = []
+    for d in docs:
+        if d["id"] in ignored or d["personel_id"] not in pmap:
+            continue
+        out.append({**d, "ad_soyad": pmap[d["personel_id"]]["ad_soyad"]})
+    out.sort(key=lambda x: (x["tarih"], x["durum"] != "nobet_istemiyor"))
+    return out
 
 
 # ------------- root -------------
@@ -162,16 +213,36 @@ async def do_generate(req: GenerateRequest):
     active = [p for p in personnel if p.get("aktif", True)]
     if len(active) < 3:
         raise HTTPException(400, "En az 3 aktif personel gerekli")
-    leaves = await build_leaves_map(req.ignore_leave_ids)
-    schedule, errors = generate_schedule(req.yil, req.ay, active, leaves, req.max_gun_asiri)
+    pmap = {p["id"]: p for p in personnel}
+    holidays = {h["tarih"] for h in await get_holidays(req.yil)}
+    carry = await get_carryover(req.yil, req.ay)
+    ignored = list(req.ignore_leave_ids)
+
+    attempts = 0
+    while True:
+        leaves = await build_leaves_map(ignored)
+        schedule, errors = generate_schedule(req.yil, req.ay, active, leaves, req.max_gun_asiri,
+                                             holidays, carry["gunler"])
+        conflicts = await find_conflicts(errors, ignored, pmap)
+        if not errors or not req.rastgele_yoksay or attempts >= 10:
+            break
+        pool = [c for c in conflicts if c["durum"] == "nobet_istemiyor"] or conflicts
+        if not pool:
+            break
+        ignored.append(random.choice(pool)["id"])
+        attempts += 1
+
     doc = schedule.model_dump()
     doc["updated_at"] = now_iso()
+    doc["yoksayilan_istekler"] = ignored
+    doc["gecis_kaynagi"] = carry["kaynak"]
     await db.schedules.update_one(
         {"yil": req.yil, "ay": req.ay},
         {"$set": doc},
         upsert=True,
     )
-    return {"success": len(errors) == 0, "errors": errors, "schedule": doc}
+    return {"success": len(errors) == 0, "errors": errors, "schedule": doc,
+            "conflicts": conflicts, "ignored": ignored, "carryover": carry}
 
 
 @api_router.post("/schedule/manual")
@@ -181,10 +252,11 @@ async def manual_update(req: ManualUpdateRequest):
         raise HTTPException(404, "Nöbet listesi bulunamadı")
 
     personnel = await get_active_personnel_list()
-    leaves = await build_leaves_map()
+    leaves = await build_leaves_map(doc.get("yoksayilan_istekler"))
+    carry = await get_carryover(req.yil, req.ay)
 
     if req.personel_id:
-        ok, msg = validate_manual_assignment(doc, req.tarih, req.slot, req.personel_id, personnel, leaves)
+        ok, msg = validate_manual_assignment(doc, req.tarih, req.slot, req.personel_id, personnel, leaves, carry["gunler"])
         if not ok:
             return {"success": False, "message": f"Kural ihlali: {msg}"}
 
@@ -247,6 +319,7 @@ async def get_stats(yil: int, ay: int):
         raise HTTPException(404, "Liste yok")
     personnel = await get_active_personnel_list()
     pmap = {p["id"]: p for p in personnel}
+    holidays = {h["tarih"] for h in await get_holidays(yil)}
 
     stats = {}
     for pid, p in pmap.items():
@@ -260,6 +333,7 @@ async def get_stats(yil: int, ay: int):
             "cumartesi": 0,
             "pazar": 0,
             "hafta_sonu": 0,
+            "tatil": 0,
             "gunduz": 0,
             "gece": 0,
             "surucu_24": 0,
@@ -273,6 +347,8 @@ async def get_stats(yil: int, ay: int):
         s["toplam_saat"] += a["saat"]
         s["toplam_nobet"] += 1
         d = date.fromisoformat(a["tarih"])
+        if a["tarih"] in holidays:
+            s["tatil"] += 1
         if d.weekday() == 5:
             s["cumartesi"] += 1
             s["hafta_sonu"] += 1
@@ -292,6 +368,104 @@ async def get_stats(yil: int, ay: int):
         s["fark"] = s["toplam_saat"] - s["hedef_saat"]
 
     return {"yil": yil, "ay": ay, "stats": list(stats.values())}
+
+
+# ------------- holidays -------------
+@api_router.get("/holidays/{yil}")
+async def list_holidays(yil: int):
+    return await get_holidays(yil)
+
+
+@api_router.post("/holidays")
+async def add_holiday(data: HolidayCreate):
+    date.fromisoformat(data.tarih)
+    await db.holidays.delete_many({"tarih": data.tarih})
+    obj = Holiday(tarih=data.tarih, ad=data.ad)
+    await db.holidays.insert_one(obj.model_dump())
+    return obj
+
+
+@api_router.delete("/holidays/{hid}")
+async def delete_holiday(hid: str):
+    res = await db.holidays.delete_one({"id": hid})
+    if res.deleted_count == 0:
+        raise HTTPException(404, "Tatil bulunamadı")
+    return {"deleted": True}
+
+
+# ------------- carryover (ay geçişi) -------------
+@api_router.get("/carryover/{yil}/{ay}")
+async def carryover_get(yil: int, ay: int):
+    return await get_carryover(yil, ay)
+
+
+@api_router.put("/carryover/{yil}/{ay}")
+async def carryover_set(yil: int, ay: int, data: CarryoverSet):
+    gunler = [g.model_dump() for g in data.gunler
+              if g.saglikci_1 or g.saglikci_2 or g.surucu_gunduz or g.surucu_gece or g.surucu_24]
+    await db.carryover.update_one({"yil": yil, "ay": ay},
+                                  {"$set": {"yil": yil, "ay": ay, "gunler": gunler, "updated_at": now_iso()}},
+                                  upsert=True)
+    return await get_carryover(yil, ay)
+
+
+# ------------- templates -------------
+@api_router.get("/templates", response_model=List[Template])
+async def list_templates():
+    return await db.templates.find({}, {"_id": 0}).sort("created_at", -1).to_list(100)
+
+
+@api_router.post("/templates", response_model=Template)
+async def create_template(data: TemplateCreate):
+    personnel = await get_active_personnel_list()
+    personel = [{"personel_id": p["id"], "ad_soyad": p["ad_soyad"], "aktif": p.get("aktif", True),
+                 "hedef_saat": p.get("hedef_saat", 180)} for p in personnel]
+    tercihler = []
+    if data.kaynak_yil and data.kaynak_ay:
+        prefix = f"{data.kaynak_yil:04d}-{data.kaynak_ay:02d}"
+        docs = await db.leaves.find({"durum": "nobet_istemiyor", "tarih": {"$regex": f"^{prefix}"}}, {"_id": 0}).to_list(10000)
+        counter = {}
+        for d in docs:
+            key = (d["personel_id"], date.fromisoformat(d["tarih"]).weekday())
+            counter[key] = counter.get(key, 0) + 1
+        tercihler = [{"personel_id": k[0], "haftanin_gunu": k[1]} for k, v in counter.items() if v >= 2]
+    obj = Template(ad=data.ad, aciklama=data.aciklama, personel=personel, tercihler=tercihler)
+    await db.templates.insert_one(obj.model_dump())
+    return obj
+
+
+@api_router.delete("/templates/{tid}")
+async def delete_template(tid: str):
+    res = await db.templates.delete_one({"id": tid})
+    if res.deleted_count == 0:
+        raise HTTPException(404, "Şablon bulunamadı")
+    return {"deleted": True}
+
+
+@api_router.post("/templates/{tid}/apply")
+async def apply_template(tid: str, data: TemplateApply):
+    tpl = await db.templates.find_one({"id": tid}, {"_id": 0})
+    if not tpl:
+        raise HTTPException(404, "Şablon bulunamadı")
+    updated = 0
+    for tp in tpl.get("personel", []):
+        res = await db.personnel.update_one({"id": tp["personel_id"]},
+                                            {"$set": {"aktif": tp["aktif"], "hedef_saat": tp["hedef_saat"]}})
+        updated += res.matched_count
+    _, dim = monthrange(data.yil, data.ay)
+    added = 0
+    for pref in tpl.get("tercihler", []):
+        for dnum in range(1, dim + 1):
+            d = date(data.yil, data.ay, dnum)
+            if d.weekday() != pref["haftanin_gunu"]:
+                continue
+            exists = await db.leaves.find_one({"personel_id": pref["personel_id"], "tarih": d.isoformat()})
+            if exists:
+                continue
+            await db.leaves.insert_one(LeaveRequest(personel_id=pref["personel_id"], tarih=d.isoformat(),
+                                                    durum="nobet_istemiyor").model_dump())
+            added += 1
+    return {"success": True, "personel_guncellendi": updated, "tercih_eklendi": added}
 
 
 # ------------- exports -------------

@@ -100,6 +100,61 @@ class GenerateRequest(BaseModel):
     ay: int
     ignore_leave_ids: List[str] = []  # leave request ids to ignore
     max_gun_asiri: int = 3  # max shifts for gün aşırı çalışma sağlıkçı
+    rastgele_yoksay: bool = False  # çakışan istekleri rastgele göz ardı et
+
+
+# ---------------- Holidays ----------------
+class HolidayCreate(BaseModel):
+    tarih: str
+    ad: str
+
+
+class Holiday(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=new_id)
+    tarih: str
+    ad: str
+    kaynak: Literal["resmi", "ozel"] = "ozel"
+
+
+# ---------------- Carryover (ay geçişi) ----------------
+class CarryoverSet(BaseModel):
+    gunler: List[ShiftDay]
+
+
+# ---------------- Templates ----------------
+class TemplatePersonnel(BaseModel):
+    personel_id: str
+    ad_soyad: str
+    aktif: bool
+    hedef_saat: int
+
+
+class TemplatePref(BaseModel):
+    personel_id: str
+    haftanin_gunu: int  # 0=Pzt ... 6=Paz
+
+
+class TemplateCreate(BaseModel):
+    ad: str
+    aciklama: str = ""
+    kaynak_yil: Optional[int] = None
+    kaynak_ay: Optional[int] = None
+
+
+class Template(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=new_id)
+    ad: str
+    aciklama: str = ""
+    personel: List[TemplatePersonnel] = []
+    tercihler: List[TemplatePref] = []
+    created_at: str = Field(default_factory=now_iso)
+
+
+class TemplateApply(BaseModel):
+    yil: int
+    ay: int
 
 
 class ManualUpdateRequest(BaseModel):

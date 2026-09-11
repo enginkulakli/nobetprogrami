@@ -84,6 +84,7 @@ export default function Statistics() {
                       <TableHead className="text-right">Cts</TableHead>
                       <TableHead className="text-right">Paz</TableHead>
                       <TableHead className="text-right">H.Sonu</TableHead>
+                      <TableHead className="text-right">Tatil</TableHead>
                       <TableHead className="text-right">Gündüz</TableHead>
                       <TableHead className="text-right">Gece</TableHead>
                       <TableHead className="text-right">24s Sür.</TableHead>
@@ -103,6 +104,7 @@ export default function Statistics() {
                         <TableCell className="text-right font-mono">{s.cumartesi}</TableCell>
                         <TableCell className="text-right font-mono">{s.pazar}</TableCell>
                         <TableCell className="text-right font-mono font-semibold">{s.hafta_sonu}</TableCell>
+                        <TableCell className="text-right font-mono text-red-700">{s.tatil}</TableCell>
                         <TableCell className="text-right font-mono">{s.gunduz}</TableCell>
                         <TableCell className="text-right font-mono">{s.gece}</TableCell>
                         <TableCell className="text-right font-mono">{s.surucu_24}</TableCell>

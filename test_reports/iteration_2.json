@@ -1,0 +1,22 @@
+{
+  "summary": "End-to-end testing of 4 new features (holidays, carryover, conflict resolution, templates) plus regression. Backend: 11/11 pytest passes covering GET/POST/DELETE /holidays (14 resmi verified for 2026, custom add/delete), schedule/generate response shape (success/errors/conflicts/ignored/carryover + yoksayilan_istekler/gecis_kaynagi), May→June onceki_liste carryover with 3 gunler, manual carryover PUT + 24h consecutive rule respected on 2026-08-01, conflict flow with ad_soyad enrichment + selective ignore_leave_ids + rastgele_yoksay auto-ignore, template full lifecycle (create with 10 personel + Monday tercih detection, apply to Oct 2026 with 4 Mondays tercih_eklendi, GET /leaves verify persistence, delete), stats.tatil > 0 for May 2026, and Excel/PDF/manual edit regression. Frontend: Schedule /nobet renders Tatil badges for 2026-05-01/19, carryover-card visible with source badge; Elle Gir opens carryover-dialog (3 days × 5 slots = 15 selects), save flips badge to 'Manuel girildi'; conflict-dialog auto-opens on Kasım 2026 failure (6 checkboxes), selecting 2 + regenerate closes dialog on success; schedule-template-select appears + apply toast shown; Ayarlar page templates-card creates/applies/deletes template with proper toast, holidays-card lists 14 items for 2026 and add/delete custom works; İstatistikler page includes Tatil column. All test data cleaned up (leaves, custom holidays, templates, Aug 2027 carryover).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_features_v2.py",
+    "/app/test_reports/pytest/pytest_v2.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py find_conflicts widens conflict dates by ±1 day to catch rest-rule violations from adjacent leaves — good pattern; consider capping to only leaves for personnel that could have filled the failing slot to reduce noise when many personnel share leave on the same date.",
+    "Templates apply endpoint blindly reactivates aktif=false personnel from snapshot — acceptable for 'template' semantics but flag in UI (currently only counts are shown).",
+    "get_carryover falls back to manual only when NO previous schedule exists; if a July schedule is later generated it silently overrides the manual carryover for August. Consider showing a warning in the UI when both exist.",
+    "server.py manual_update inline SLOT_TO_TASK logic duplicates knowledge that lives in scheduler.py TASKS — extract a small helper to avoid drift."
+  ],
+  "updated_files": ["/app/backend/tests/test_features_v2.py"],
+  "success_rate": {"backend": "100% (11/11)", "frontend": "100% (all flows verified)"},
+  "seed_data_creation": "Temporary: yillik_izin for 6 saglikci on 2026-11-10 (cleaned), TEST_UI_Şablon + Standart Ekip templates (cleaned), custom holiday 2026-06-20 (cleaned), manual carryover 2027-08 (cleaned). Demo personnel (10) already seeded — untouched.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "All 4 new features (holidays, carryover, conflicts, templates) are fully working end-to-end. Reusable pytest suite at /app/backend/tests/test_features_v2.py — run with `REACT_APP_BACKEND_URL=<url> pytest backend/tests/test_features_v2.py -n 0`. External preview URL used. May 2026 & Kasım 2026 schedules exist in DB; June/Aug 2026 may exist too from tests. If you need clean state, wipe the schedules collection."
+}

@@ -6,7 +6,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { Sparkles, FileSpreadsheet, FileText, Pencil, AlertTriangle, Printer } from "lucide-react";
+import { Sparkles, FileSpreadsheet, FileText, Pencil, AlertTriangle, Printer, Flag, ListX, LayoutTemplate } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { ConflictDialog } from "@/components/schedule/ConflictDialog";
+import { CarryoverCard } from "@/components/schedule/CarryoverCard";
+import { useTemplates, applyTemplate } from "@/components/TemplatesCard";
 
 const SLOTS = [
   { key: "saglikci_1", label: "Sağlıkçı 1", role: "saglikci" },
@@ -24,12 +28,20 @@ export default function Schedule() {
   const [errors, setErrors] = useState([]);
   const [loading, setLoading] = useState(false);
   const [editing, setEditing] = useState(null); // { tarih, slot, currentPid }
+  const [holidays, setHolidays] = useState({});
+  const [conflicts, setConflicts] = useState([]);
+  const [conflictOpen, setConflictOpen] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [tplId, setTplId] = useState("");
+  const { templates } = useTemplates();
 
   const pmap = useMemo(() => Object.fromEntries(personnel.map((p) => [p.id, p])), [personnel]);
 
+  const loadPersonnel = () => api.get("/personnel").then((r) => setPersonnel(r.data));
+  useEffect(() => { loadPersonnel(); }, []);
   useEffect(() => {
-    api.get("/personnel").then((r) => setPersonnel(r.data));
-  }, []);
+    api.get(`/holidays/${yil}`).then((r) => setHolidays(Object.fromEntries(r.data.map((h) => [h.tarih, h.ad]))));
+  }, [yil]);
 
   const loadSchedule = async () => {
     const r = await api.get(`/schedule/${yil}/${ay}`);
@@ -43,17 +55,32 @@ export default function Schedule() {
   };
   useEffect(() => { loadSchedule(); }, [yil, ay]);
 
-  const generate = async () => {
+  const generate = async (extra = {}) => {
     setLoading(true);
     try {
-      const r = await api.post("/schedule/generate", { yil, ay });
+      const r = await api.post("/schedule/generate", { yil, ay, ...extra });
       setSchedule(r.data.schedule);
       setErrors(r.data.errors || []);
-      if (r.data.success) toast.success("Nöbet listesi oluşturuldu");
-      else toast.warning(`${r.data.errors.length} sorun tespit edildi`);
+      setConflicts(r.data.conflicts || []);
+      setRefreshKey((k) => k + 1);
+      if (r.data.success) {
+        setConflictOpen(false);
+        toast.success(r.data.ignored?.length ? `Liste oluşturuldu (${r.data.ignored.length} istek göz ardı edildi)` : "Nöbet listesi oluşturuldu");
+      } else {
+        toast.warning(`${r.data.errors.length} sorun tespit edildi`);
+        setConflictOpen(true);
+      }
     } catch (e) {
       toast.error("Oluşturulamadı: " + (e.response?.data?.detail || e.message));
     } finally { setLoading(false); }
+  };
+
+  const doApplyTemplate = async () => {
+    if (!tplId) return;
+    try {
+      await applyTemplate(tplId, yil, ay);
+      loadPersonnel();
+    } catch (e) { toast.error("Şablon uygulanamadı: " + e.message); }
   };
 
   const openEdit = (tarih, slot, currentPid) => {
@@ -116,7 +143,23 @@ export default function Schedule() {
               </SelectContent>
             </Select>
           </div>
-          <Button onClick={generate} disabled={loading} data-testid="generate-btn">
+          {templates.length > 0 && (
+            <div>
+              <div className="text-xs font-semibold text-muted-foreground mb-1">Şablon</div>
+              <div className="flex gap-1">
+                <Select value={tplId} onValueChange={setTplId}>
+                  <SelectTrigger className="w-40" data-testid="schedule-template-select"><SelectValue placeholder="Şablon seç" /></SelectTrigger>
+                  <SelectContent>
+                    {templates.map((t) => <SelectItem key={t.id} value={t.id}>{t.ad}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+                <Button variant="outline" onClick={doApplyTemplate} disabled={!tplId} data-testid="schedule-template-apply-btn" title="Şablonu bu aya uygula">
+                  <LayoutTemplate className="w-4 h-4" />
+                </Button>
+              </div>
+            </div>
+          )}
+          <Button onClick={() => generate()} disabled={loading} data-testid="generate-btn">
             <Sparkles className="w-4 h-4 mr-2" /> {loading ? "Oluşturuluyor..." : "Oluştur"}
           </Button>
           {schedule && (
@@ -134,16 +177,27 @@ export default function Schedule() {
           <CardContent className="p-4">
             <div className="flex items-start gap-3">
               <AlertTriangle className="w-5 h-5 text-orange-600 mt-0.5" />
-              <div>
+              <div className="flex-1">
                 <div className="font-semibold text-orange-900">Uyarı: Bazı görevler atanamadı</div>
                 <ul className="mt-2 text-sm text-orange-800 list-disc list-inside space-y-0.5 max-h-40 overflow-y-auto">
                   {errors.slice(0, 20).map((e, i) => <li key={i}>{e}</li>)}
                   {errors.length > 20 && <li>...ve {errors.length - 20} tane daha</li>}
                 </ul>
               </div>
+              <Button variant="outline" size="sm" className="border-orange-300 text-orange-900 hover:bg-orange-100" onClick={() => setConflictOpen(true)} data-testid="open-conflicts-btn">
+                <ListX className="w-4 h-4 mr-2" /> Çakışan İstekleri Çöz
+              </Button>
             </div>
           </CardContent>
         </Card>
+      )}
+
+      <CarryoverCard yil={yil} ay={ay} personnel={personnel.filter((p) => p.aktif)} pmap={pmap} refreshKey={refreshKey} />
+
+      {schedule?.yoksayilan_istekler?.length > 0 && (
+        <div className="text-xs text-muted-foreground no-print" data-testid="ignored-info">
+          Bu liste oluşturulurken {schedule.yoksayilan_istekler.length} istek göz ardı edildi.
+        </div>
       )}
 
       {!schedule ? (
@@ -162,7 +216,7 @@ export default function Schedule() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="w-24">Tarih</TableHead>
+                    <TableHead className="w-40">Tarih</TableHead>
                     <TableHead className="w-16">Gün</TableHead>
                     <TableHead>Sağlıkçı 1</TableHead>
                     <TableHead>Sağlıkçı 2</TableHead>
@@ -175,9 +229,19 @@ export default function Schedule() {
                   {schedule.gunler.map((day) => {
                     const d = new Date(day.tarih + "T00:00:00");
                     const isWeekend = d.getDay() === 0 || d.getDay() === 6;
+                    const holiday = holidays[day.tarih];
                     return (
-                      <TableRow key={day.tarih} className={isWeekend ? "bg-secondary/60" : ""}>
-                        <TableCell className="font-mono text-xs">{day.tarih}</TableCell>
+                      <TableRow key={day.tarih} className={holiday ? "bg-red-50/70 dark:bg-red-950/20" : isWeekend ? "bg-secondary/60" : ""} data-testid={`row-${day.tarih}`}>
+                        <TableCell className="font-mono text-xs">
+                          <div className="flex items-center gap-1.5 whitespace-nowrap">
+                            {day.tarih}
+                            {holiday && (
+                              <Badge variant="outline" className="bg-red-100 text-red-700 border-red-200 text-[10px] px-1.5 py-0 font-sans" title={holiday} data-testid={`holiday-badge-${day.tarih}`}>
+                                <Flag className="w-2.5 h-2.5 mr-1" /> Tatil
+                              </Badge>
+                            )}
+                          </div>
+                        </TableCell>
                         <TableCell className="font-semibold text-xs">{DAYS_TR[(d.getDay() + 6) % 7]}</TableCell>
                         {SLOTS.map((s) => (
                           <SlotCell
@@ -197,6 +261,15 @@ export default function Schedule() {
           </CardContent>
         </Card>
       )}
+
+      <ConflictDialog
+        open={conflictOpen}
+        onClose={() => setConflictOpen(false)}
+        conflicts={conflicts}
+        errors={errors}
+        loading={loading}
+        onRegenerate={(extra) => generate({ ...extra, ignore_leave_ids: [...(schedule?.yoksayilan_istekler || []), ...(extra.ignore_leave_ids || [])] })}
+      />
 
       <Dialog open={!!editing} onOpenChange={(o) => !o && setEditing(null)}>
         <DialogContent data-testid="edit-slot-dialog">

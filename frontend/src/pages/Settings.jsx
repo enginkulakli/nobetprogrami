@@ -4,6 +4,8 @@ import { useTheme } from "@/lib/theme";
 import { api } from "@/lib/api";
 import { toast } from "sonner";
 import { Palette, Database } from "lucide-react";
+import { TemplatesCard } from "@/components/TemplatesCard";
+import { HolidaysCard } from "@/components/HolidaysCard";
 
 export default function Settings() {
   const { theme, setTheme } = useTheme();
@@ -70,11 +72,14 @@ export default function Settings() {
         </CardContent>
       </Card>
 
+      <TemplatesCard />
+      <HolidaysCard />
+
       <Card>
         <CardHeader><CardTitle className="font-heading">Kurallar</CardTitle></CardHeader>
         <CardContent className="text-sm text-muted-foreground space-y-2">
           <p><strong className="text-foreground">Kesin (Hard) Kurallar:</strong> Yıllık izin, min 12s sürücü dinlenmesi, sağlıkçı arka arkaya 24s yasağı, sürücü max 3 gün üst üste, rol uyumluluğu, iki 24s arasında en az 1 gün.</p>
-          <p><strong className="text-foreground">Tercih (Soft) Kurallar:</strong> Çalışma saati dengesi, nöbet sayısı dengesi, hafta sonu dengesi, gündüz/gece dengesi, "Nöbet istemiyorum" tercihleri.</p>
+          <p><strong className="text-foreground">Tercih (Soft) Kurallar:</strong> Çalışma saati dengesi, nöbet sayısı dengesi, hafta sonu dengesi, resmi tatil dengesi, gündüz/gece dengesi, "Nöbet istemiyorum" tercihleri.</p>
         </CardContent>
       </Card>
     </div>

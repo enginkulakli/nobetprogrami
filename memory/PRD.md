@@ -33,10 +33,16 @@ Türkçe, modern, mobil uyumlu 112 Acil Sağlık Hizmetleri personel nöbet plan
 - ✅ Print stylesheet
 - ✅ Backend testing: 18/18 pass
 
+## Implemented (2026-06)
+- ✅ Çakışan istek ekranı: generate başarısızsa `conflicts` (sorunlu gün ±1 izin/istekler) döner; ConflictDialog seçili istekleri `ignore_leave_ids` ile yoksayar; `rastgele_yoksay` ile otomatik. Listede `yoksayilan_istekler` saklanır.
+- ✅ Resmi tatiller: `holidays.py` (2024-2027 sabit + dini bayramlar) + özel tatil CRUD (`/api/holidays`). Tabloda "Tatil" badge, scheduler'da tatil nöbeti dengesi (soft), stats `tatil` sütunu. Ayarlar > Resmi Tatiller kartı.
+- ✅ Ay geçişi: `get_carryover` önceki ay listesinin son 3 gününü otomatik alır; yoksa manuel giriş (`PUT /api/carryover/{y}/{m}`). Scheduler `preload_days` ile ilk günlerde dinlenme/24s kuralları kontrol edilir. Manuel düzenleme de carry-over'ı kullanır.
+- ✅ Ekip şablonları: `/api/templates` (personel aktif+hedef saat + ≥2 kez tekrar eden haftanın günü bazlı nöbet istemiyorum tercihleri), `apply` ile yeni aya uygulama. Ayarlar kartı + Nöbet Listesi başlığında hızlı uygulama.
+- ✅ Testing: iteration_2 — backend 11/11, frontend tüm akışlar pass
+
 ## Backlog / Next Actions
-- P1: Çakışan istek çözümlemesi UI (yönetici hangi isteği görmezden gelecek seçsin)
-- P1: Önceki aydan taşan nöbet takibi (ilk günler için)
-- P2: Resmi tatil ekranı ve tatil dengesi
 - P2: İstasyon/grup bazlı kurallar
 - P2: Kullanıcı hesabı (multi-user, sonraki faz)
 - P2: Manuel edit sonrası real-time kural badge tablonun içinde
+- P2: İzinler takviminde tatil günlerinin işaretlenmesi
+- P2: Ay geçişi son 3 gün yerine yapılandırılabilir gün sayısı
