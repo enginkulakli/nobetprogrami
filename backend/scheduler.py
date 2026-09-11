@@ -361,3 +361,36 @@ def validate_manual_assignment(
 
     ok, msg = ctx.can_assign(new_pid, dt_new, task_new)
     return ok, msg
+
+
+def compute_violations(
+    schedule_doc: dict,
+    personnel: List[dict],
+    leaves: Dict[str, Dict[str, str]],
+    carryover_days: Optional[List[dict]] = None,
+) -> List[dict]:
+    """Her dolu hücre için diğer tüm atamalara göre kural ihlali / tercih uyarısı üretir."""
+    cells = []
+    for day in schedule_doc.get("gunler", []):
+        for slot, task in SLOT_TO_TASK.items():
+            pid = day.get(slot)
+            if pid:
+                cells.append((day["tarih"], slot, task, pid))
+
+    out = []
+    for tarih, slot, task, pid in cells:
+        ctx = SchedulerContext(personnel, leaves)
+        ctx.preload_days(carryover_days or [])
+        for t2, s2, task2, pid2 in cells:
+            if (t2, s2) == (tarih, slot) or pid2 not in ctx.personnel:
+                continue
+            ctx.assign(pid2, date.fromisoformat(t2), task2, count_stats=False)
+        if pid not in ctx.personnel:
+            out.append({"tarih": tarih, "slot": slot, "tur": "hard", "mesaj": "Personel pasif veya silinmiş"})
+            continue
+        ok, msg = ctx.can_assign(pid, date.fromisoformat(tarih), task)
+        if not ok:
+            out.append({"tarih": tarih, "slot": slot, "tur": "hard", "mesaj": msg})
+        elif leaves.get(pid, {}).get(tarih) == "nobet_istemiyor":
+            out.append({"tarih": tarih, "slot": slot, "tur": "soft", "mesaj": "\"Nöbet istemiyorum\" tercihi göz ardı edildi"})
+    return out

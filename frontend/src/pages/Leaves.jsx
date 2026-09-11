@@ -4,7 +4,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
-import { ChevronLeft, ChevronRight, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, X, Flag } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 // helper: days in month
 function buildMonth(yil, ay) {
@@ -27,6 +28,11 @@ export default function Leaves() {
   const [ay, setAy] = useState(new Date().getMonth() + 1);
   const [leaves, setLeaves] = useState([]);
   const [selected, setSelected] = useState(new Set());
+  const [holidays, setHolidays] = useState({});
+
+  useEffect(() => {
+    api.get(`/holidays/${yil}`).then((r) => setHolidays(Object.fromEntries(r.data.map((h) => [h.tarih, h.ad]))));
+  }, [yil]);
 
   useEffect(() => {
     api.get("/personnel").then((r) => {
@@ -77,6 +83,7 @@ export default function Leaves() {
   };
 
   return (
+    <TooltipProvider delayDuration={150}>
     <div className="space-y-6" data-testid="leaves-page">
       <div>
         <div className="text-xs font-bold uppercase tracking-[0.2em] text-muted-foreground">Personel Tercihleri</div>
@@ -122,19 +129,29 @@ export default function Leaves() {
               if (status === "yillik_izin") cls = "leave-cell-yillik";
               else if (status === "nobet_istemiyor") cls = "leave-cell-nobet";
               if (isSelected) cls += " ring-2 ring-primary";
-              return (
+              const holiday = holidays[d.iso];
+              if (holiday && !status) cls += " border-red-300 bg-red-50";
+              const btn = (
                 <button
                   key={d.iso}
                   data-testid={`day-${d.iso}`}
                   onClick={() => toggleSelect(d.iso)}
-                  className={`aspect-square min-h-[44px] rounded-md border text-sm font-semibold transition-colors duration-150 ${cls}`}
+                  className={`relative aspect-square min-h-[44px] w-full rounded-md border text-sm font-semibold transition-colors duration-150 ${cls}`}
                 >
+                  {holiday && <Flag className="absolute top-1 right-1 w-3 h-3 text-red-600" data-testid={`holiday-mark-${d.iso}`} />}
                   <div className="flex flex-col items-center justify-center h-full">
-                    <span>{d.day}</span>
+                    <span className={holiday ? "text-red-700" : ""}>{d.day}</span>
                     {status === "yillik_izin" && <span className="text-[10px] mt-0.5">İZİN</span>}
                     {status === "nobet_istemiyor" && <span className="text-[10px] mt-0.5">İST.</span>}
                   </div>
                 </button>
+              );
+              if (!holiday) return btn;
+              return (
+                <Tooltip key={d.iso}>
+                  <TooltipTrigger asChild>{btn}</TooltipTrigger>
+                  <TooltipContent>{holiday}</TooltipContent>
+                </Tooltip>
               );
             })}
           </div>
@@ -143,6 +160,7 @@ export default function Leaves() {
             <div className="flex items-center gap-1.5"><span className="w-3 h-3 rounded leave-cell-yillik border" /> Yıllık İzin</div>
             <div className="flex items-center gap-1.5"><span className="w-3 h-3 rounded leave-cell-nobet border" /> Nöbet İstemiyorum</div>
             <div className="flex items-center gap-1.5"><span className="w-3 h-3 rounded border bg-card" /> Tercih Yok</div>
+            <div className="flex items-center gap-1.5"><span className="w-3 h-3 rounded border border-red-300 bg-red-50" /> Resmi Tatil</div>
           </div>
 
           <div className="mt-6 flex flex-col sm:flex-row gap-2">
@@ -163,5 +181,6 @@ export default function Leaves() {
         </CardContent>
       </Card>
     </div>
+    </TooltipProvider>
   );
 }

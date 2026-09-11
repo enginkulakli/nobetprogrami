@@ -19,7 +19,7 @@ from models import (
     HolidayCreate, Holiday, CarryoverSet, TemplateCreate, Template, TemplateApply,
     new_id, now_iso,
 )
-from scheduler import generate_schedule, validate_manual_assignment, TASKS
+from scheduler import generate_schedule, validate_manual_assignment, compute_violations, TASKS
 from seed import DEMO_PERSONNEL
 from holidays import official_holidays
 
@@ -311,6 +311,120 @@ async def manual_update(req: ManualUpdateRequest):
     return {"success": True, "schedule": doc}
 
 
+# ------------- violations (canlı kural rozetleri) -------------
+@api_router.get("/schedule/{yil}/{ay}/violations")
+async def get_violations(yil: int, ay: int):
+    doc = await db.schedules.find_one({"yil": yil, "ay": ay}, {"_id": 0})
+    if not doc:
+        return {"violations": []}
+    personnel = await get_active_personnel_list()
+    leaves = await build_leaves_map(doc.get("yoksayilan_istekler"))
+    carry = await get_carryover(yil, ay)
+    return {"violations": compute_violations(doc, personnel, leaves, carry["gunler"])}
+
+
+# ------------- personel nöbet kartı -------------
+GUNLER_TR = ["Pzt", "Sal", "Çar", "Per", "Cum", "Cts", "Paz"]
+MONTHS_TR = ["Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran",
+             "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık"]
+
+
+async def _personnel_card_data(yil: int, ay: int, pid: str):
+    doc = await db.schedules.find_one({"yil": yil, "ay": ay}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "Liste yok")
+    p = await db.personnel.find_one({"id": pid}, {"_id": 0})
+    if not p:
+        raise HTTPException(404, "Personel bulunamadı")
+    holidays = {h["tarih"]: h["ad"] for h in await get_holidays(yil)}
+    items = []
+    for a in sorted(doc.get("assignments", []), key=lambda x: x["tarih"]):
+        if a["personel_id"] != pid:
+            continue
+        d = date.fromisoformat(a["tarih"])
+        items.append({
+            "tarih": a["tarih"], "gun": GUNLER_TR[d.weekday()], "gorev": _fmt_task_label(a["gorev"]),
+            "saat_araligi": f"{a['baslangic']}-{a['bitis']}", "saat": a["saat"],
+            "tatil": holidays.get(a["tarih"]), "hafta_sonu": d.weekday() >= 5,
+        })
+    toplam = sum(i["saat"] for i in items)
+    return p, items, toplam
+
+
+def _card_text(p: dict, yil: int, ay: int, items: List[dict], toplam: int) -> str:
+    lines = [f"🚑 112 Nöbet Listesi — {MONTHS_TR[ay - 1]} {yil}", f"👤 {p['ad_soyad']}", ""]
+    for i in items:
+        d = date.fromisoformat(i["tarih"])
+        extra = f" 🏖 {i['tatil']}" if i["tatil"] else ""
+        lines.append(f"• {d.day:02d} {MONTHS_TR[ay - 1][:3]} {i['gun']} — {i['gorev']} ({i['saat_araligi']}){extra}")
+    lines += ["", f"Toplam: {len(items)} nöbet / {toplam} saat"]
+    return "\n".join(lines)
+
+
+@api_router.get("/schedule/{yil}/{ay}/personnel/{pid}/card")
+async def personnel_card(yil: int, ay: int, pid: str):
+    p, items, toplam = await _personnel_card_data(yil, ay, pid)
+    return {"personel": p, "nobetler": items, "toplam_saat": toplam, "toplam_nobet": len(items),
+            "mesaj": _card_text(p, yil, ay, items, toplam)}
+
+
+def _register_pdf_font() -> str:
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+    fonts_dir = ROOT_DIR / "fonts"
+    try:
+        if "LiberationSans" not in pdfmetrics.getRegisteredFontNames():
+            pdfmetrics.registerFont(TTFont("LiberationSans", str(fonts_dir / "LiberationSans-Regular.ttf")))
+            pdfmetrics.registerFont(TTFont("LiberationSans-Bold", str(fonts_dir / "LiberationSans-Bold.ttf")))
+        return "LiberationSans"
+    except Exception:
+        return "Helvetica"
+
+
+@api_router.get("/schedule/{yil}/{ay}/personnel/{pid}/export/pdf")
+async def personnel_card_pdf(yil: int, ay: int, pid: str):
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib import colors
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+
+    p, items, toplam = await _personnel_card_data(yil, ay, pid)
+    font = _register_pdf_font()
+    bold = f"{font}-Bold" if font != "Helvetica" else "Helvetica-Bold"
+    buf = io.BytesIO()
+    pdf = SimpleDocTemplate(buf, pagesize=A4, leftMargin=36, rightMargin=36, topMargin=36, bottomMargin=36)
+    styles = getSampleStyleSheet()
+    title = ParagraphStyle("t", parent=styles["Title"], fontName=bold)
+    body = ParagraphStyle("b", parent=styles["Normal"], fontName=font, fontSize=11)
+    elements = [
+        Paragraph(f"112 Nöbet Kartı — {MONTHS_TR[ay - 1]} {yil}", title),
+        Paragraph(f"<b>{p['ad_soyad']}</b> · {len(items)} nöbet · {toplam} saat", body),
+        Spacer(1, 12),
+    ]
+    data = [["Tarih", "Gün", "Görev", "Saat", "Not"]]
+    for i in items:
+        data.append([i["tarih"], i["gun"], i["gorev"], i["saat_araligi"],
+                     i["tatil"] or ("Hafta sonu" if i["hafta_sonu"] else "")])
+    t = Table(data, repeatRows=1, colWidths=[80, 45, 120, 80, 180])
+    t.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0B2A4A")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.whitesmoke),
+        ("FONTNAME", (0, 0), (-1, 0), bold),
+        ("FONTNAME", (0, 1), (-1, -1), font),
+        ("FONTSIZE", (0, 0), (-1, -1), 10),
+        ("GRID", (0, 0), (-1, -1), 0.4, colors.grey),
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.whitesmoke, colors.white]),
+    ]))
+    elements.append(t)
+    pdf.build(elements)
+    buf.seek(0)
+    from urllib.parse import quote
+    fname = quote(f"nobet_karti_{p['ad_soyad'].replace(' ', '_')}_{yil}_{ay:02d}.pdf")
+    return StreamingResponse(buf, media_type="application/pdf",
+                             headers={"Content-Disposition": f"attachment; filename*=UTF-8''{fname}"})
+
+
 # ------------- statistics -------------
 @api_router.get("/schedule/{yil}/{ay}/stats")
 async def get_stats(yil: int, ay: int):
@@ -540,9 +654,12 @@ async def export_pdf(yil: int, ay: int):
     personnel = await get_active_personnel_list()
     pmap = {p["id"]: p["ad_soyad"] for p in personnel}
 
+    font = _register_pdf_font()
+    bold = f"{font}-Bold" if font != "Helvetica" else "Helvetica-Bold"
     buf = io.BytesIO()
     pdf = SimpleDocTemplate(buf, pagesize=landscape(A4), leftMargin=20, rightMargin=20, topMargin=20, bottomMargin=20)
     styles = getSampleStyleSheet()
+    styles["Title"].fontName = bold
     elements = [Paragraph(f"<b>112 Nöbet Listesi - {yil}/{ay:02d}</b>", styles["Title"]), Spacer(1, 10)]
 
     gunler_tr = ["Pzt", "Sal", "Çar", "Per", "Cum", "Cts", "Paz"]
@@ -563,7 +680,8 @@ async def export_pdf(yil: int, ay: int):
     t.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0B2A4A")),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.whitesmoke),
-        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTNAME", (0, 0), (-1, 0), bold),
+        ("FONTNAME", (0, 1), (-1, -1), font),
         ("FONTSIZE", (0, 0), (-1, -1), 9),
         ("GRID", (0, 0), (-1, -1), 0.4, colors.grey),
         ("ALIGN", (0, 0), (-1, -1), "CENTER"),

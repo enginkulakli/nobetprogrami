@@ -6,7 +6,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { Sparkles, FileSpreadsheet, FileText, Pencil, AlertTriangle, Printer, Flag, ListX, LayoutTemplate } from "lucide-react";
+import { Sparkles, FileSpreadsheet, FileText, Pencil, AlertTriangle, Printer, Flag, ListX, LayoutTemplate, IdCard, Info } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { PersonnelCardDialog } from "@/components/schedule/PersonnelCardDialog";
 import { Badge } from "@/components/ui/badge";
 import { ConflictDialog } from "@/components/schedule/ConflictDialog";
 import { CarryoverCard } from "@/components/schedule/CarryoverCard";
@@ -33,6 +35,8 @@ export default function Schedule() {
   const [conflictOpen, setConflictOpen] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const [tplId, setTplId] = useState("");
+  const [violations, setViolations] = useState({});
+  const [cardOpen, setCardOpen] = useState(false);
   const { templates } = useTemplates();
 
   const pmap = useMemo(() => Object.fromEntries(personnel.map((p) => [p.id, p])), [personnel]);
@@ -43,14 +47,21 @@ export default function Schedule() {
     api.get(`/holidays/${yil}`).then((r) => setHolidays(Object.fromEntries(r.data.map((h) => [h.tarih, h.ad]))));
   }, [yil]);
 
+  const loadViolations = async () => {
+    const r = await api.get(`/schedule/${yil}/${ay}/violations`);
+    setViolations(Object.fromEntries(r.data.violations.map((v) => [`${v.tarih}|${v.slot}`, v])));
+  };
+
   const loadSchedule = async () => {
     const r = await api.get(`/schedule/${yil}/${ay}`);
     if (r.data.exists) {
       setSchedule(r.data);
       setErrors(r.data.ihlaller || []);
+      loadViolations();
     } else {
       setSchedule(null);
       setErrors([]);
+      setViolations({});
     }
   };
   useEffect(() => { loadSchedule(); }, [yil, ay]);
@@ -62,6 +73,7 @@ export default function Schedule() {
       setSchedule(r.data.schedule);
       setErrors(r.data.errors || []);
       setConflicts(r.data.conflicts || []);
+      loadViolations();
       setRefreshKey((k) => k + 1);
       if (r.data.success) {
         setConflictOpen(false);
@@ -118,6 +130,7 @@ export default function Schedule() {
   };
 
   return (
+    <TooltipProvider delayDuration={150}>
     <div className="space-y-6" data-testid="schedule-page">
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 no-print">
         <div>
@@ -167,6 +180,7 @@ export default function Schedule() {
               <Button variant="outline" onClick={exportExcel} data-testid="export-excel-btn"><FileSpreadsheet className="w-4 h-4 mr-2" />Excel</Button>
               <Button variant="outline" onClick={exportPdf} data-testid="export-pdf-btn"><FileText className="w-4 h-4 mr-2" />PDF</Button>
               <Button variant="outline" onClick={() => window.print()} data-testid="print-btn"><Printer className="w-4 h-4 mr-2" />Yazdır</Button>
+              <Button variant="outline" onClick={() => setCardOpen(true)} data-testid="personnel-card-btn"><IdCard className="w-4 h-4 mr-2" />Personel Kartı</Button>
             </>
           )}
         </div>
@@ -236,9 +250,14 @@ export default function Schedule() {
                           <div className="flex items-center gap-1.5 whitespace-nowrap">
                             {day.tarih}
                             {holiday && (
-                              <Badge variant="outline" className="bg-red-100 text-red-700 border-red-200 text-[10px] px-1.5 py-0 font-sans" title={holiday} data-testid={`holiday-badge-${day.tarih}`}>
-                                <Flag className="w-2.5 h-2.5 mr-1" /> Tatil
-                              </Badge>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Badge variant="outline" className="bg-red-100 text-red-700 border-red-200 text-[10px] px-1.5 py-0 font-sans cursor-help" data-testid={`holiday-badge-${day.tarih}`}>
+                                    <Flag className="w-2.5 h-2.5 mr-1" /> Tatil
+                                  </Badge>
+                                </TooltipTrigger>
+                                <TooltipContent data-testid={`holiday-tooltip-${day.tarih}`}>{holiday}</TooltipContent>
+                              </Tooltip>
                             )}
                           </div>
                         </TableCell>
@@ -248,6 +267,7 @@ export default function Schedule() {
                             key={s.key}
                             slot={s}
                             personName={pmap[day[s.key]]?.ad_soyad}
+                            violation={violations[`${day.tarih}|${s.key}`]}
                             has24Driver={!!day.surucu_24}
                             onEdit={() => openEdit(day.tarih, s.key, day[s.key])}
                           />
@@ -270,6 +290,8 @@ export default function Schedule() {
         loading={loading}
         onRegenerate={(extra) => generate({ ...extra, ignore_leave_ids: [...(schedule?.yoksayilan_istekler || []), ...(extra.ignore_leave_ids || [])] })}
       />
+
+      <PersonnelCardDialog open={cardOpen} onClose={() => setCardOpen(false)} yil={yil} ay={ay} personnel={personnel.filter((p) => p.aktif)} />
 
       <Dialog open={!!editing} onOpenChange={(o) => !o && setEditing(null)}>
         <DialogContent data-testid="edit-slot-dialog">
@@ -309,10 +331,32 @@ export default function Schedule() {
         </DialogContent>
       </Dialog>
     </div>
+    </TooltipProvider>
   );
 }
 
-function SlotCell({ slot, personName, has24Driver, onEdit }) {
+function ViolationBadge({ violation, tarih, slot }) {
+  if (!violation) return null;
+  const hard = violation.tur === "hard";
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          className={`inline-flex items-center justify-center w-4 h-4 rounded-full cursor-help ${hard ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-700"}`}
+          data-testid={`violation-badge-${tarih}-${slot}`}
+        >
+          {hard ? <AlertTriangle className="w-2.5 h-2.5" /> : <Info className="w-2.5 h-2.5" />}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent className="max-w-xs" data-testid={`violation-tooltip-${tarih}-${slot}`}>
+        <div className="text-xs font-semibold">{hard ? "Kural ihlali" : "Tercih uyarısı"}</div>
+        <div className="text-xs">{violation.mesaj}</div>
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+function SlotCell({ slot, personName, has24Driver, onEdit, violation }) {
   // hide 12h driver slots when 24h driver is set
   if (has24Driver && (slot.key === "surucu_gunduz" || slot.key === "surucu_gece")) {
     return <TableCell className="text-muted-foreground text-xs italic">— 24s aktif —</TableCell>;
@@ -328,14 +372,15 @@ function SlotCell({ slot, personName, has24Driver, onEdit }) {
     );
   }
   return (
-    <TableCell>
+    <TableCell className={violation ? (violation.tur === "hard" ? "bg-red-50/60" : "bg-amber-50/60") : ""}>
       <button
         onClick={onEdit}
-        className="group inline-flex items-center gap-1.5 text-sm hover:text-primary"
+        className="group inline-flex items-center gap-1.5 text-sm hover:text-primary mr-1.5"
       >
         <span>{personName || <span className="text-muted-foreground italic">Boş</span>}</span>
         <Pencil className="w-3 h-3 opacity-0 group-hover:opacity-100" />
       </button>
+      <ViolationBadge violation={violation} tarih={violation?.tarih} slot={slot.key} />
     </TableCell>
   );
 }

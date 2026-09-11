@@ -39,10 +39,16 @@ Türkçe, modern, mobil uyumlu 112 Acil Sağlık Hizmetleri personel nöbet plan
 - ✅ Ay geçişi: `get_carryover` önceki ay listesinin son 3 gününü otomatik alır; yoksa manuel giriş (`PUT /api/carryover/{y}/{m}`). Scheduler `preload_days` ile ilk günlerde dinlenme/24s kuralları kontrol edilir. Manuel düzenleme de carry-over'ı kullanır.
 - ✅ Ekip şablonları: `/api/templates` (personel aktif+hedef saat + ≥2 kez tekrar eden haftanın günü bazlı nöbet istemiyorum tercihleri), `apply` ile yeni aya uygulama. Ayarlar kartı + Nöbet Listesi başlığında hızlı uygulama.
 - ✅ Testing: iteration_2 — backend 11/11, frontend tüm akışlar pass
+- ✅ İzin takviminde tatil işareti (kırmızı bayrak + tooltip tatil adı), legend
+- ✅ Canlı kural rozetleri: `GET /api/schedule/{y}/{m}/violations` (`compute_violations`) → hücrede kırmızı (hard) / amber (soft "nöbet istemiyorum") rozet + tooltip nedeni
+- ✅ Personel nöbet kartı: `GET .../personnel/{pid}/card` (WhatsApp metni) + `.../personnel/{pid}/export/pdf`; dialog: WhatsApp (wa.me), Kopyala, PDF
+- ✅ Tatil rozetinde tooltip ile tatil adı
+- ✅ PDF'lerde Türkçe karakter desteği (LiberationSans, `backend/fonts/`)
+- ✅ Testing: iteration_3 — backend 8/8, frontend pass
 
 ## Backlog / Next Actions
 - P2: İstasyon/grup bazlı kurallar
 - P2: Kullanıcı hesabı (multi-user, sonraki faz)
-- P2: Manuel edit sonrası real-time kural badge tablonun içinde
-- P2: İzinler takviminde tatil günlerinin işaretlenmesi
+- P2: Manuel edit dialogunda personel yanında "uygun/ihlal" ön kontrolü
+- P2: İzinler takviminde tatil günlerinin işaretlenmesi ✅ (tamamlandı)
 - P2: Ay geçişi son 3 gün yerine yapılandırılabilir gün sayısı

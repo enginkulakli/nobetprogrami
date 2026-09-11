@@ -1,0 +1,32 @@
+{
+  "summary": "Iteration 3 covers three new features: (1) violations endpoint + live rule badges, (2) holiday tooltip in schedule and leaves calendars, (3) per-personnel shift card (WhatsApp/PDF/copy). Backend: 8/8 pytest passes — GET /schedule/2026/5/violations returns empty on a clean schedule, hard entry with mesaj 'Yıllık izin günü' after setting yillik_izin on an assigned date, soft entry after nobet_istemiyor; personnel card returns shape {personel, nobetler, toplam_saat, toplam_nobet, mesaj} with 'Mayıs 2026' + name in mesaj and holiday name on 2026-05-01 entries; card PDF returns application/pdf starting with %PDF and 404 for unknown pid (both /card and /export/pdf); full-schedule PDF regression still 200 with LiberationSans. Frontend: /izinler — navigated via prev-month to Mayıs 2026, day-2026-05-01 & day-2026-05-19 show holiday-mark flag icon with red styling, hover tooltip shows 'Emek ve Dayanışma Günü', legend has 'Resmi Tatil', marking a holiday as yıllık izin still works then cleared. /nobet — holiday-badge-2026-05-01 tooltip = 'Emek ve Dayanışma Günü'; violation-badge (hard) is bg-red-100 with 'Kural ihlali' + 'Yıllık izin günü' tooltip; violation-badge (soft) is bg-amber-100 with 'Tercih uyarısı' + '\"Nöbet istemiyorum\" tercihi göz ardı edildi' tooltip. Personnel Card Dialog opens with first active personnel (Ahmet Yılmaz), shows card-total-shifts '12 nöbet' + card-total-hours '288 saat', 12 card-row entries; row for 2026-05-01 displays 'Emek ve Dayanışma Günü' badge; copy button triggers 'Mesaj kopyalandı' toast (needs clipboard-write perms); WhatsApp button opens popup to wa.me→api.whatsapp.com/send/?text=... with URL-encoded message; PDF button opens /api/schedule/2026/5/personnel/{pid}/export/pdf in new tab. All created leaves cleaned up.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Personnel Card → WhatsApp share", "issue": "The 🚑 ambulance emoji in mesaj is corrupted to U+FFFD (%EF%BF%BD) when wa.me redirects to api.whatsapp.com/send. Turkish chars (ö, ı, ş, —) encode correctly. This is WhatsApp's redirect behavior on 4-byte UTF-8 characters. Consider replacing 🚑 with a BMP-plane symbol (e.g. + or ⚕) in _card_text, or open wa.me directly with pre-encoded https://api.whatsapp.com/send?text=... to bypass wa.me's transform.", "affected_selectors": ["card-whatsapp-btn"]},
+      {"flow": "Personnel Card → Copy", "issue": "card-copy-btn does `await navigator.clipboard.writeText` without try/catch. If browser denies clipboard permission (common in test sandboxes / non-secure contexts), the whole handler throws and no toast is shown; console error surfaces. Wrap with try/catch and show fallback toast on failure.", "affected_selectors": ["card-copy-btn"]}
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_features_v3.py",
+    "/app/test_reports/pytest/pytest_v3.xml"
+  ],
+  "action_items": [
+    "Optional: replace 🚑 emoji in _card_text with a BMP symbol so WhatsApp share preserves it (or point WA button at api.whatsapp.com/send/ directly).",
+    "Wrap navigator.clipboard.writeText in try/catch in PersonnelCardDialog.copy() to degrade gracefully when permission denied."
+  ],
+  "critical_code_review_comments": [
+    "server.py::compute_violations recomputes SchedulerContext + replays all assignments for every cell (O(N*A)). For a 31-day month with 5 slots this is ~150 replays × ~150 assignments = fine, but grows quadratically; consider caching a base ctx snapshot per invocation.",
+    "PersonnelCardDialog.copy has no try/catch — clipboard rejections surface as uncaught runtime errors (visible red overlay).",
+    "server.py::_register_pdf_font swallows font-registration exceptions silently and falls back to Helvetica — fine, but Helvetica lacks Turkish chars (ş/ğ/ı) which will render as boxes if the LiberationSans fonts are ever missing. Log a warning.",
+    "personnel_card_pdf 404-checks personnel via _personnel_card_data (which raises 404), but the response is registered as StreamingResponse; if the schedule doc is missing it returns 'Liste yok' with 404 — good. However if pid exists but has 0 assignments, response still succeeds — verify this is desired."
+  ],
+  "updated_files": ["/app/backend/tests/test_features_v3.py"],
+  "success_rate": {"backend": "100% (8/8)", "frontend": "100% of new features (holiday tooltip, violation badges hard+soft, personnel card open/rows/holiday-in-card/copy toast/WA popup URL/PDF popup URL/select-change)"},
+  "seed_data_creation": "Temporary yillik_izin & nobet_istemiyor on random May 2026 assigned dates during violation tests — all cleaned up (durum:null). May 2026 schedule already existed from iteration_2.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "iteration_3 covered violations endpoint (hard/soft), personnel card GET+PDF, holiday tooltips in Leaves/Schedule, and full Personnel Card Dialog. Reusable pytest at /app/backend/tests/test_features_v3.py. Two minor cosmetic action items only: 🚑 emoji lost in WA redirect (WhatsApp side) and copy button lacks try/catch. No blocking bugs."
+}
