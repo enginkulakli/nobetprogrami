@@ -28,14 +28,25 @@ api.interceptors.response.use(
   }
 );
 
-export function formatApiError(e) {
-  const detail = e.response?.data?.detail;
+export function formatApiError(e) {  const detail = e.response?.data?.detail;
   if (detail == null) return e.message || "Bir hata oluştu";
   if (typeof detail === "string") return detail;
   if (Array.isArray(detail))
     return detail.map((x) => (x && typeof x.msg === "string" ? x.msg : JSON.stringify(x))).join(" ");
   if (detail && typeof detail.msg === "string") return detail.msg;
   return String(detail);
+}
+
+export async function downloadFile(path, filename) {
+  const res = await api.get(path, { responseType: "blob" });
+  const url = URL.createObjectURL(res.data);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
 export const PERSONNEL_LABELS = {

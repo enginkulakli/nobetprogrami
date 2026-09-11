@@ -12,6 +12,7 @@ import Schedule from "@/pages/Schedule";
 import Statistics from "@/pages/Statistics";
 import Settings from "@/pages/Settings";
 import Users from "@/pages/Users";
+import ForcePassword from "@/pages/ForcePassword";
 import { Loader2 } from "lucide-react";
 
 function AdminOnly({ children }) {
@@ -45,10 +46,15 @@ function AppRoutes() {
       </div>
     );
   }
+  const mustChangePassword = user && user.role === "istasyon_sorumlusu" && !user.sifre_degistirildi;
   return (
     <Routes>
       <Route path="/login" element={user ? <Navigate to="/" replace /> : <Login />} />
-      <Route path="/*" element={user ? <ProtectedApp /> : <Navigate to="/login" replace />} />
+      <Route path="/*" element={
+        !user ? <Navigate to="/login" replace />
+          : mustChangePassword ? <ForcePassword />
+          : <ProtectedApp />
+      } />
     </Routes>
   );
 }

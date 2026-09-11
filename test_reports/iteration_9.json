@@ -1,0 +1,26 @@
+{
+  "summary": "Narrow retest of the export-download authentication fix from iteration_8. downloadFile() helper (axios GET responseType:'blob' → object URL → <a download>) is correctly used by all 5 export triggers. Verified end-to-end in the browser (logged in as admin, selected station 'merkez 1', /nobet already had a Sep 2026 schedule with 11 personnel). All 5 exports now DOWNLOAD a real file (no 401 tab, no error toast). Backend responses observed via network: Excel 200 (xlsx, 6138B), Schedule PDF 200 (55KB), Personnel single PDF 200 (53KB), All-cards PDF 200 (68KB), All-cards ZIP 200 (548KB). WhatsApp button still opens wa.me in a new tab as intended.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "PersonnelCardDialog WhatsApp message text", "issues": ["The generated WhatsApp share text contains U+FFFD replacement characters (%EF%BF%BD) at the start of the message (visible in the wa.me URL). Pre-existing content bug (backend/helpers generating card.mesaj) — not part of this retest. Consider follow-up: ensure emoji/ambulance icons are emitted as valid UTF-8 or omit them."]}
+    ]
+  },
+  "test_report_links": ["/app/test_reports/iteration_8.json", "/app/test_reports/iteration_9.json"],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "downloadFile() in /app/frontend/src/lib/api.js is clean and correctly uses the api axios instance so both Authorization Bearer and X-Istasyon-Id are forwarded. URL.revokeObjectURL is called after triggering the click — good hygiene.",
+    "Schedule.jsx exportExcel/exportPdf + PersonnelCardDialog pdf/allPdf/allZip all wrap downloadFile in try/catch and surface backend detail via formatApiError(e) toast — proper error UX.",
+    "Follow-up (non-blocking): card.mesaj emitted by backend contains U+FFFD chars (likely from a stripped emoji). Investigate helpers.py where the personnel card message is composed."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (5/5 export endpoints 200 with correct content-types)", "frontend": "100% (5/5 export buttons download files; WhatsApp opens external tab)"},
+  "test_credentials": "admin/admin123 (seeded). Station used: 'merkez 1'. Schedule tested: 2026-09.",
+  "seed_data_creation": "None new; reused TEST_ personnel + Sep 2026 schedule seeded in iteration_8.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Iteration_8 export-download bug is fully fixed. All 5 authenticated download flows verified in a real browser (playwright expect_download resolved for each; MIME types and non-zero sizes verified: xlsx, pdf x3, zip). If retest requested for other flows, remember: admin must select a station (data-testid='station-select-trigger') before /nobet; if no schedule exists click data-testid='generate-btn' (requires >=3 active personnel).",
+  "rca of the issue": "Previously window.open() launched a top-level navigation which does not carry the axios Authorization/X-Istasyon-Id headers, so the FastAPI dependency responded 401. Fix replaces the anchor navigation with an authenticated axios GET (responseType:'blob'), converts the blob to an object URL, and programmatically triggers a hidden <a download> click. This preserves the JWT + station headers via the existing interceptor, and produces a real browser download event instead of a new tab. Retest confirms 200 responses and correct Content-Type / Content-Disposition for all five endpoints."
+}

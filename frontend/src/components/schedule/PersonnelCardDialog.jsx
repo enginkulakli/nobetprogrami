@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, MONTHS_TR } from "@/lib/api";
+import { api, MONTHS_TR, downloadFile, formatApiError } from "@/lib/api";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -22,9 +22,20 @@ export function PersonnelCardDialog({ open, onClose, yil, ay, personnel }) {
     toast.success("Mesaj kopyalandı");
   };
   const whatsapp = () => window.open(`https://wa.me/?text=${encodeURIComponent(card.mesaj)}`, "_blank");
-  const pdf = () => window.open(`${api.defaults.baseURL}/schedule/${yil}/${ay}/personnel/${pid}/export/pdf`, "_blank");
-  const allPdf = () => window.open(`${api.defaults.baseURL}/schedule/${yil}/${ay}/personnel-cards/export/pdf`, "_blank");
-  const allZip = () => window.open(`${api.defaults.baseURL}/schedule/${yil}/${ay}/personnel-cards/export/zip`, "_blank");
+  const mm = String(ay).padStart(2, "0");
+  const safe = (s) => (s || "personel").replace(/\s+/g, "_");
+  const pdf = async () => {
+    try { await downloadFile(`/schedule/${yil}/${ay}/personnel/${pid}/export/pdf`, `nobet_karti_${safe(card?.personel?.ad_soyad)}_${yil}_${mm}.pdf`); }
+    catch (e) { toast.error(formatApiError(e)); }
+  };
+  const allPdf = async () => {
+    try { await downloadFile(`/schedule/${yil}/${ay}/personnel-cards/export/pdf`, `nobet_kartlari_${yil}_${mm}.pdf`); }
+    catch (e) { toast.error(formatApiError(e)); }
+  };
+  const allZip = async () => {
+    try { await downloadFile(`/schedule/${yil}/${ay}/personnel-cards/export/zip`, `nobet_kartlari_${yil}_${mm}.zip`); }
+    catch (e) { toast.error(formatApiError(e)); }
+  };
   const idx = personnel.findIndex((p) => p.id === pid);
   const step = (d) => { const n = personnel[idx + d]; if (n) setPid(n.id); };
 

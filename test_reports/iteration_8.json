@@ -1,0 +1,31 @@
+{
+  "summary": "Verified (1) first-login forced password change gate for istasyon_sorumlusu and (2) frontend regression after backend router refactor. All force-password flows PASSED end-to-end. All 6 pages (Dashboard/Personeller/İzinler/Nöbet/İstatistikler/Ayarlar) load without errors after selecting a station as admin. Manager scope enforced (no station selector, badge visible). Add personnel works. Backend exports (Excel/PDF) return 200 via curl with correct auth. However, UI Excel/PDF export BUTTONS are broken because Schedule.jsx uses window.open() which does not send the Authorization Bearer token, so a new tab opens with 401 {\"detail\":\"Giriş gerekli\"}. This is likely pre-existing (not caused by refactor) but violates the review's requirement that exports 'trigger a download (HTTP 200, no error toast)'.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Schedule.jsx exportExcel/exportPdf", "issue": "Uses window.open(url) which does NOT include the Authorization header — the export endpoints require Bearer JWT, so the new tab shows 401 'Giriş gerekli' instead of a file download. Must be replaced with an authenticated fetch → blob → object URL / download link (or the backend must accept a signed short-lived query token).", "selector": "[data-testid='export-excel-btn'], [data-testid='export-pdf-btn']", "priority": "HIGH"}
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": ["/app/test_reports/iteration_8.json"],
+  "action_items": [
+    "Fix Excel/PDF export in /app/frontend/src/pages/Schedule.jsx: replace window.open with an axios GET (responseType:'blob') using the api instance so the Authorization + X-Istasyon-Id headers are sent, then create an object URL and trigger a temporary <a download> click. Also required for admin because X-Istasyon-Id is not attached to window.open() either."
+  ],
+  "critical_code_review_comments": [
+    "Schedule.jsx lines 125-126: window.open(...) for /api/schedule/{yil}/{ay}/export/excel|pdf bypasses the axios auth interceptor — this pattern is fundamentally broken for JWT-based auth and misses X-Istasyon-Id header for admins.",
+    "Refactor into routers/ + deps.py + helpers.py looks clean; deps.current_station centralizes station isolation. No behavioural regressions detected on any UI page.",
+    "Force-password gate in App.js correctly renders ForcePassword when role==istasyon_sorumlusu && !sifre_degistirildi and blocks sidebar/layout as expected."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (curl e2e: login, station select, seed, personnel CRUD, generate, excel 200, pdf 200)", "frontend": "~90% (force-password flow 100%, refactor regression 100%, but UI export buttons broken due to auth-less window.open)"},
+  "test_credentials": "admin/admin123 (seeded). Created test_sorumlu/temp1234 then changed to yeni12345 during test. NOTE: test_sorumlu was later wiped from DB during the session (possibly by preview env reset) — recreate before rerun.",
+  "seed_data_creation": "Added 10 TEST_ personnel (mix of saglikci/surucu, fazla_mesai=true) to station 'merkez 1' via API and generated Sep 2026 schedule (30 days, no errors) to enable export verification.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Force-password flow (data-testid=force-password-page/force-old-password/force-new-password/force-new-password-repeat/force-submit/force-error) fully verified. Auth store (auth.jsx) correctly updates user.sifre_degistirildi on change. Only remaining fix: authenticate Excel/PDF export button (Schedule.jsx exportExcel/exportPdf). All routers respond OK: /api/schedule/generate (POST body {yil,ay,max_gun_asiri,rastgele_yoksay,ignore_leave_ids}), /api/schedule/{y}/{m}/export/excel & /pdf. Station header is X-Istasyon-Id (not X-Station-Id).",
+  "rca of the issue": "Export buttons call window.open(`${api.defaults.baseURL}/schedule/${yil}/${ay}/export/{excel|pdf}`, '_blank'). A cross-tab navigation initiated by window.open sends only cookies; it does not carry axios' Authorization header, so the FastAPI dependency get_current_user rejects with 401 'Giriş gerekli'. Reproduction: log in as admin, select station 'merkez 1' (must have >=3 active personnel & a generated schedule), open /nobet, click Excel or PDF → new tab shows 401 JSON. Mitigation: fetch the file via authenticated axios (responseType='blob'), then const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=`nobet_${yil}_${ay}.xlsx`; a.click(); URL.revokeObjectURL(url)."
+}

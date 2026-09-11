@@ -67,6 +67,12 @@ Türkçe, modern, mobil uyumlu 112 Acil Sağlık Hizmetleri personel nöbet plan
 - ✅ Tatiller global (tüm istasyonlarda ortak, sadece login gerektirir).
 - ✅ Testing: iteration_7 — backend 14/14 (kritik izolasyon dahil), frontend tüm akışlar pass. Regresyon testi: `backend/tests/test_auth_isolation.py`.
 
+## Implemented (2026-06) — İlk Şifre Zorunluluğu + Router Refactor
+- ✅ İlk giriş şifre zorunluluğu: İstasyon sorumlusu `sifre_degistirildi=false` ise, giriş sonrası uygulamaya erişemeden `ForcePassword` ekranı zorlanır (admin muaf). `App.js` mustChangePassword kapısı + `pages/ForcePassword.jsx`. Şifre değişince akış açılır. iteration_8 pass.
+- ✅ Router refactor: `server.py` slim hale getirildi; endpoint'ler `routers/{auth,admin,personnel,schedules,exports,holidays}_router.py`, paylaşımlı `deps.py` (db + auth/istasyon dependency'leri) ve `helpers.py` (personel/izin/tatil/hedef/carryover/kart yardımcıları) dosyalarına bölündü. Davranış değişmedi — pytest 14/14 + curl e2e + frontend regresyon pass (iteration_8).
+- ✅ Export auth düzeltmesi: Auth eklenince `window.open` ile açılan Excel/PDF/kart/ZIP indirmeleri 401 veriyordu (Authorization + X-Istasyon-Id header'ı gitmiyordu). `lib/api.js`'e `downloadFile()` (axios blob GET → object URL → <a download>) eklendi; Schedule.jsx ve PersonnelCardDialog.jsx'teki 5 indirme buna çevrildi. 5/5 indirme doğrulandı (iteration_9).
+- ℹ️ İstasyon Kuralları özelliği kullanıcı isteğiyle KAPSAM DIŞI bırakıldı (mevcut algoritma/ekip yapısı değiştirilmedi).
+
 ## Bug Fixes
 - 2026-06: "Uncaught runtime errors / removeChild" her sayfada ilk tıklamada → Neden: index.html `lang="en"` iken UI Türkçe olduğu için Chrome otomatik çeviri yapıyor, Google Translate DOM metin düğümlerini değiştiriyor ve React reconciliation kırılıyor. Fix: `<html lang="tr" translate="no" class="notranslate">` + `<meta name="google" content="notranslate">`, başlık "112 Nöbet Listesi". iteration_6 pass.
 

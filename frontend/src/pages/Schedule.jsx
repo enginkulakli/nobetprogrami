@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, MONTHS_TR, DAYS_TR, PERSONNEL_LABELS, TASK_LABELS } from "@/lib/api";
+import { api, MONTHS_TR, DAYS_TR, PERSONNEL_LABELS, TASK_LABELS, downloadFile, formatApiError } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -122,8 +122,14 @@ export default function Schedule() {
     } catch (e) { toast.error("Hata: " + e.message); }
   };
 
-  const exportExcel = () => window.open(`${api.defaults.baseURL}/schedule/${yil}/${ay}/export/excel`, "_blank");
-  const exportPdf = () => window.open(`${api.defaults.baseURL}/schedule/${yil}/${ay}/export/pdf`, "_blank");
+  const exportExcel = async () => {
+    try { await downloadFile(`/schedule/${yil}/${ay}/export/excel`, `nobet_${yil}_${String(ay).padStart(2, "0")}.xlsx`); }
+    catch (e) { toast.error(formatApiError(e)); }
+  };
+  const exportPdf = async () => {
+    try { await downloadFile(`/schedule/${yil}/${ay}/export/pdf`, `nobet_${yil}_${String(ay).padStart(2, "0")}.pdf`); }
+    catch (e) { toast.error(formatApiError(e)); }
+  };
 
   return (
     <TooltipProvider delayDuration={150}>
