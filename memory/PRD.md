@@ -45,6 +45,15 @@ Türkçe, modern, mobil uyumlu 112 Acil Sağlık Hizmetleri personel nöbet plan
 - ✅ Tatil rozetinde tooltip ile tatil adı
 - ✅ PDF'lerde Türkçe karakter desteği (LiberationSans, `backend/fonts/`)
 - ✅ Testing: iteration_3 — backend 8/8, frontend pass
+- ✅ Atama ön kontrolü (`POST /api/schedule/candidates`): edit dialogunda uygun/ihlal + neden + saat; takas önerisi (ihlal rozetine tıkla → "Önerilen" alternatifler)
+- ✅ Ana sayfa "Bu Ayın Durumu" özeti (`GET .../summary`): kural ihlali / tercih uyarısı / boş görev
+- ✅ Toplu kart: `.../personnel-cards/export/pdf` (tek PDF) ve `/zip`; kart dialogunda önceki/sonraki
+- ✅ Testing: iteration_4 — backend 10/10, frontend pass
+- ✅ Otomatik normal çalışma hedefi (`compute_normal_target`): hafta içi gün×8 − hafta içi tatil − hafta içi yıllık izin; `GET .../targets`; stats: normal_hedef / gerceklesen / eksik_saat / fazla_mesai / toplam
+- ✅ Fazla mesai opt-in: `personnel.fazla_mesai`; seçili olmayan personel hedefi aşamaz (HARD kural 6); seçililer arasında adil dağıtım (skor); `POST /api/personnel/fazla-mesai`; Personeller sayfasında chip kartı; generate `ipucu`
+- ✅ İzinler sayfası: sol personel listesi (arama + izin/istek sayaçları), sağ takvim, modal yok, çoklu tarih
+- ✅ Sağlıkçı+Sürücü `surucu_tercihi` (12/24/yok): 24 tercihli varsa 2 sağlıkçı + 1×24s sürücü, 12s sürücü atanmaz; skorlama tercihleri gözetir
+- ✅ Testing: iteration_5 — backend 12/12, frontend pass
 
 ## Backlog / Next Actions
 - P2: İstasyon/grup bazlı kurallar

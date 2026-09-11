@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, MONTHS_TR, DAYS_TR } from "@/lib/api";
+import { api, MONTHS_TR, DAYS_TR, PERSONNEL_LABELS } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
-import { ChevronLeft, ChevronRight, X, Flag } from "lucide-react";
+import { ChevronLeft, ChevronRight, X, Flag, Search, User } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 // helper: days in month
@@ -29,6 +29,19 @@ export default function Leaves() {
   const [leaves, setLeaves] = useState([]);
   const [selected, setSelected] = useState(new Set());
   const [holidays, setHolidays] = useState({});
+  const [filter, setFilter] = useState("");
+  const [allLeaves, setAllLeaves] = useState([]);
+
+  const loadAllLeaves = () => api.get(`/leaves?yil=${yil}&ay=${ay}`).then((r) => setAllLeaves(r.data));
+  useEffect(() => { loadAllLeaves(); }, [yil, ay]);
+  const leaveCounts = useMemo(() => {
+    const m = {};
+    allLeaves.forEach((x) => {
+      m[x.personel_id] = m[x.personel_id] || { izin: 0, istek: 0 };
+      if (x.durum === "yillik_izin") m[x.personel_id].izin += 1; else m[x.personel_id].istek += 1;
+    });
+    return m;
+  }, [allLeaves]);
 
   useEffect(() => {
     api.get(`/holidays/${yil}`).then((r) => setHolidays(Object.fromEntries(r.data.map((h) => [h.tarih, h.ad]))));
@@ -71,8 +84,9 @@ export default function Leaves() {
       tarihler: Array.from(selected),
       durum,
     });
-    toast.success(durum === null ? "Seçim temizlendi" : "Kaydedildi");
+    toast.success(durum === null ? "Seçim temizlendi" : `${selected.size} gün kaydedildi`);
     loadLeaves();
+    loadAllLeaves();
   };
 
   const prevMonth = () => {
@@ -91,30 +105,59 @@ export default function Leaves() {
         <p className="text-muted-foreground mt-1">Personel bazında yıllık izin ve nöbet istememe tercihleri</p>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Seçim</CardTitle>
-        </CardHeader>
-        <CardContent className="flex flex-col md:flex-row md:items-end gap-3">
-          <div className="flex-1 min-w-[200px]">
-            <div className="text-xs font-semibold text-muted-foreground mb-1">Personel</div>
-            <Select value={selectedPid} onValueChange={setSelectedPid}>
-              <SelectTrigger data-testid="leaves-personnel-select"><SelectValue placeholder="Personel seç..." /></SelectTrigger>
-              <SelectContent>
-                {personnel.map((p) => <SelectItem key={p.id} value={p.id}>{p.ad_soyad}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button variant="outline" size="icon" onClick={prevMonth} data-testid="prev-month"><ChevronLeft className="w-4 h-4" /></Button>
-            <div className="font-heading font-bold text-lg min-w-[140px] text-center" data-testid="leaves-month-label">{MONTHS_TR[ay-1]} {yil}</div>
-            <Button variant="outline" size="icon" onClick={nextMonth} data-testid="next-month"><ChevronRight className="w-4 h-4" /></Button>
-          </div>
-        </CardContent>
-      </Card>
+      <div className="grid grid-cols-1 lg:grid-cols-[300px_1fr] gap-4 items-start">
+        {/* SOL: personel listesi */}
+        <Card className="lg:sticky lg:top-4" data-testid="leaves-personnel-list">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base font-heading flex items-center gap-2"><User className="w-4 h-4" /> Personeller</CardTitle>
+            <div className="relative mt-2">
+              <Search className="w-4 h-4 absolute left-2.5 top-2.5 text-muted-foreground" />
+              <Input placeholder="Ara..." value={filter} onChange={(e) => setFilter(e.target.value)} className="pl-8 h-9" data-testid="leaves-personnel-filter" />
+            </div>
+          </CardHeader>
+          <CardContent className="p-2 max-h-[60vh] overflow-y-auto">
+            {personnel.filter((p) => p.ad_soyad.toLowerCase().includes(filter.toLowerCase())).map((p) => {
+              const c = leaveCounts[p.id];
+              const active = p.id === selectedPid;
+              return (
+                <button
+                  key={p.id}
+                  onClick={() => setSelectedPid(p.id)}
+                  data-testid={`leaves-person-${p.id}`}
+                  data-active={active}
+                  className={`w-full text-left px-3 py-2 rounded-md flex items-center gap-3 transition-colors duration-150 ${active ? "bg-primary text-primary-foreground" : "hover:bg-secondary"}`}
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-semibold truncate">{p.ad_soyad}</div>
+                    <div className={`text-[11px] ${active ? "text-primary-foreground/80" : "text-muted-foreground"}`}>{PERSONNEL_LABELS[p.personel_turu]}{!p.aktif && " · Pasif"}</div>
+                  </div>
+                  {c && (
+                    <div className="flex gap-1 shrink-0">
+                      {c.izin > 0 && <span className={`text-[10px] font-bold px-1.5 rounded ${active ? "bg-white/20" : "leave-cell-yillik"}`}>{c.izin}</span>}
+                      {c.istek > 0 && <span className={`text-[10px] font-bold px-1.5 rounded ${active ? "bg-white/20" : "leave-cell-nobet"}`}>{c.istek}</span>}
+                    </div>
+                  )}
+                </button>
+              );
+            })}
+          </CardContent>
+        </Card>
 
+        {/* SAĞ: takvim */}
+        <div className="space-y-4 min-w-0">
       <Card>
         <CardContent className="p-4 sm:p-6">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+            <div>
+              <div className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Seçili Personel</div>
+              <div className="font-heading font-bold text-lg" data-testid="leaves-selected-name">{personnel.find((p) => p.id === selectedPid)?.ad_soyad || "—"}</div>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="icon" onClick={prevMonth} data-testid="prev-month"><ChevronLeft className="w-4 h-4" /></Button>
+              <div className="font-heading font-bold text-lg min-w-[140px] text-center" data-testid="leaves-month-label">{MONTHS_TR[ay-1]} {yil}</div>
+              <Button variant="outline" size="icon" onClick={nextMonth} data-testid="next-month"><ChevronRight className="w-4 h-4" /></Button>
+            </div>
+          </div>
           <div className="grid grid-cols-7 gap-1 sm:gap-2 mb-2">
             {DAYS_TR.map((d) => (
               <div key={d} className="text-xs font-bold uppercase tracking-wider text-muted-foreground text-center py-1">{d}</div>
@@ -164,7 +207,7 @@ export default function Leaves() {
           </div>
 
           <div className="mt-6 flex flex-col sm:flex-row gap-2">
-            <div className="text-sm text-muted-foreground flex-1">Seçili: <strong data-testid="selected-count">{selected.size}</strong> gün</div>
+            <div className="text-sm text-muted-foreground flex-1">Seçili: <strong data-testid="selected-count">{selected.size}</strong> gün <span className="text-xs">(birden fazla gün seçip tek işlemle kaydedin)</span></div>
             <div className="flex flex-wrap gap-2">
               <Button variant="outline" onClick={() => setSelected(new Set())} disabled={!selected.size}>
                 <X className="w-4 h-4 mr-1" /> Seçimi Kaldır
@@ -180,6 +223,8 @@ export default function Leaves() {
           </div>
         </CardContent>
       </Card>
+        </div>
+      </div>
     </div>
     </TooltipProvider>
   );

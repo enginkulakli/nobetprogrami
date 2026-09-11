@@ -9,6 +9,7 @@ import uuid
 PersonnelType = Literal["saglikci", "surucu", "saglikci_surucu"]
 LeaveStatus = Literal["yillik_izin", "nobet_istemiyor"]
 TaskKind = Literal["saglikci_24", "surucu_gunduz", "surucu_gece", "surucu_24"]
+SurucuTercihi = Literal["12", "24", "yok"]
 
 
 def now_iso() -> str:
@@ -28,6 +29,8 @@ class Personnel(BaseModel):
     aktif: bool = True
     hedef_saat: int = 180
     aciklama: str = ""
+    fazla_mesai: bool = False
+    surucu_tercihi: SurucuTercihi = "yok"
     created_at: str = Field(default_factory=now_iso)
 
 
@@ -37,6 +40,8 @@ class PersonnelCreate(BaseModel):
     aktif: bool = True
     hedef_saat: int = 180
     aciklama: str = ""
+    fazla_mesai: bool = False
+    surucu_tercihi: SurucuTercihi = "yok"
 
 
 class PersonnelUpdate(BaseModel):
@@ -45,6 +50,8 @@ class PersonnelUpdate(BaseModel):
     aktif: Optional[bool] = None
     hedef_saat: Optional[int] = None
     aciklama: Optional[str] = None
+    fazla_mesai: Optional[bool] = None
+    surucu_tercihi: Optional[SurucuTercihi] = None
 
 
 # ---------------- Leave / Request ----------------

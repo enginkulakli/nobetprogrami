@@ -1,0 +1,30 @@
+{
+  "summary": "Iteration 4 covers four new features: (1) POST /api/schedule/candidates pre-check + swap-sort, (2) GET /api/schedule/{y}/{m}/summary (hard/soft/empty/updated_at), (3) bulk personnel-cards PDF + ZIP exports, (4) Personnel Card Dialog prev/next navigation + bulk exports and Schedule swap-mode dialog from violation badge. Backend: 10/10 pytest passes (test_features_v4.py) — candidates for 'saglikci_2' return only saglikci/saglikci_surucu types, sorted uygun-first, ≤3 onerilen=true, mevcut=true on current holder; 'surucu_24' returns only saglikci_surucu; 404 for non-existent month (2027/3). Summary shape has all required fields, gun_sayisi=31, clean hard=[]; after adding yillik_izin for assigned pid/date the hard list picks it up with mesaj='Yıllık izin günü'; 2027/3 returns {exists:false}. Bulk PDF returns application/pdf (%PDF header); bulk ZIP returns application/zip with 10 PDFs (one per assigned personnel); both 404 for 2027/3. Frontend: Dashboard Mayıs 2026 clean state shows summary-card with 'Sorun yok' badge and 0/0/0 counters; summary-open-btn navigates to /nobet; after backend leave violation added, hard=1 and summary-details shows 2026-05-01 'Yıllık izin günü'. Schedule /nobet: clicking Sağlıkçı 2 cell on 2026-05-04 opens edit-slot-dialog with 6 candidates (1 uygun/5 not), data-uygun attributes correct, unsuitable ones disabled with red reason 'Min 12 saat dinlenme kuralı ihlali' via candidate-reason-{pid}, Mevcut badge appears once. Boşalt clears the cell, reopening + clicking original assign-{pid} restores name and shows 'Görev güncellendi' toast. Swap mode: after creating yillik_izin leave, violation-badge-2026-05-01-saglikci_1 is clickable → dialog title starts with 'Takas Önerisi'; since only unsuitable alternatives exist (all uygun=false for that slot/day), no-alternative-msg is shown (Kuralları bozmayan alternatif bulunamadı). Personnel Card Dialog: card-prev-btn disabled at first person (Ahmet Yılmaz), position '1 / 10 personel'; card-next-btn advances to '2 / 10 personel'; card-all-pdf-btn opens window at /api/schedule/2026/5/personnel-cards/export/pdf; card-all-zip-btn opens /api/schedule/2026/5/personnel-cards/export/zip (verified via window.open override capture). All temporary leaves cleaned up (durum:null). May 2026 schedule preserved.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_features_v4.py",
+    "/app/test_reports/pytest/pytest_v4.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "PersonnelCardDialog.copy() (line 20-23) still lacks try/catch around navigator.clipboard.writeText — same issue flagged in iteration_3. On sandboxed contexts it throws NotAllowedError and no toast is shown.",
+    "server.py::slot_candidates recomputes validate_manual_assignment N times per request without caching a base ctx snapshot — same O(N*A) issue flagged in iteration_3 for violations; still fast enough at 10 personnel but scales quadratically.",
+    "server.py::_all_cards runs _personnel_card_data (async DB queries) sequentially in a for-loop; consider asyncio.gather for parallel personnel fetches on bulk PDF/ZIP endpoints when personnel count grows.",
+    "server.py has grown to 843 lines — approaching the 700-line threshold guideline; consider splitting PDF/exports helpers, candidates/summary, and CRUD routers into modules for maintainability.",
+    "Sort key in slot_candidates (line 517) puts tercih_uyarisi=false first among 'uygun', which is correct, but doesn't tie-break onerilen candidates by |saat-hedef_saat| distance — current secondary sort is raw 'saat' which may push already-heavy personnel down; consider sorting by (hedef_saat - saat) desc so under-target personnel are recommended first.",
+    "candidates response leaves current holder with onerilen=false but still appears sorted by 'uygun' status — which is fine, however the Mevcut candidate is placed at whatever position uygun/tercih/saat ranks, not pinned to top; UI relies on the Mevcut badge which is visible but users may miss it if scrolled."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_features_v4.py"
+  ],
+  "success_rate": {"backend": "100% (10/10)", "frontend": "100% of new features (dashboard summary clean+violation, candidates pre-check, Boşalt+reassign+toast, swap mode dialog with no-alternative-msg, card dialog prev/next + bulk PDF/ZIP URLs)"},
+  "seed_data_creation": "Temporary yillik_izin leave on 2026-05-01/saglikci_1 during dashboard+swap tests — all cleaned up (durum:null). No schedule modifications persisted (edit dialog test cleared then restored original assignment).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iteration 4 covered candidates endpoint, summary endpoint, bulk personnel-cards PDF+ZIP, plus front-end swap-mode dialog + card-dialog prev/next + bulk exports. Reusable pytest at /app/backend/tests/test_features_v4.py (10 tests). For UI popup URL verification of window.open, override window.open in evaluate() and read window.__opened — Playwright's context.expect_page() returns URLs that don't resolve for streaming/download responses (returns ':' initially). No blocking bugs; no retest needed."
+}

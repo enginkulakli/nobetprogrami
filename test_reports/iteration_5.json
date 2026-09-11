@@ -1,0 +1,29 @@
+{
+  "summary": "Iteration 5 tested normal target hours, overtime opt-in scheduler enforcement, 24h driver preference, redesigned Leaves page, Personnel overtime chips + surucu_tercihi, Statistics new columns and ConflictDialog fazla mesai hint. Backend: 12/12 pytest passed. Frontend: /izinler, /personeller, /istatistikler and /nobet flows all verified end-to-end. Final state restored: all 10 personnel fazla_mesai=true, surucu_tercihi='yok', July 2026 schedule regenerated successfully with success=true.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Statistics /istatistikler", "issues": ["Non-overtime-relevant note: drivers (Hakan/Burak/Kemal/Serkan) all end July with Eksik=8 (168 vs 176). Not a bug per rules — 12h shifts distribution — but soft balance could be tightened so drivers reach normal_hedef when overtime is enabled."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_features_v5.py",
+    "/app/test_reports/pytest/iter5.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py:657 POST /personnel/fazla-mesai uses raw dict body (no Pydantic model). Works but recommend a typed model for validation and OpenAPI schema.",
+    "scheduler.compute_normal_target: leaves is filtered to yillik_izin only for weekday non-holiday (correct); consider unit-testing edge cases such as month with no weekdays holidays.",
+    "Statistics chart legend order 'Fazla Mesai / Normal Hedef / Normal Çalışma' — visually stacked bars & separate Hedef bar are correct, but tooltip currently shows Normal Çalışma value which is min(toplam, normal_hedef); acceptable."
+  ],
+  "updated_files": ["/app/backend/tests/test_features_v5.py"],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "None required",
+  "seed_data_creation": "None (used existing 10 demo personnel & July 2026 schedule)",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Final state after iteration 5: all 10 personnel have fazla_mesai=true and surucu_tercihi='yok'; July 2026 schedule is complete (success=true). May 2026 leaves cleaned. Test file /app/backend/tests/test_features_v5.py restores state on final test. Backend test_features_v1..v5.py cover cumulative features.",
+  "rca of the issue": "N/A — no bugs found"
+}

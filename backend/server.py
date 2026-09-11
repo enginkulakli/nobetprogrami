@@ -7,7 +7,8 @@ import os
 import io
 import logging
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Literal
+from pydantic import BaseModel
 from calendar import monthrange
 from datetime import date, timedelta
 import random
@@ -19,7 +20,7 @@ from models import (
     HolidayCreate, Holiday, CarryoverSet, TemplateCreate, Template, TemplateApply,
     new_id, now_iso,
 )
-from scheduler import generate_schedule, validate_manual_assignment, compute_violations, TASKS
+from scheduler import generate_schedule, validate_manual_assignment, compute_violations, compute_normal_target, TASKS
 from seed import DEMO_PERSONNEL
 from holidays import official_holidays
 
@@ -66,6 +67,11 @@ async def get_holidays(yil: int) -> List[dict]:
     custom = await db.holidays.find({"tarih": {"$regex": f"^{yil:04d}"}}, {"_id": 0}).to_list(1000)
     out += [{"tarih": c["tarih"], "ad": c["ad"], "kaynak": "ozel", "id": c["id"]} for c in custom]
     return sorted(out, key=lambda h: h["tarih"])
+
+
+async def build_targets(yil: int, ay: int, personnel: List[dict], leaves: dict) -> dict:
+    holidays = {h["tarih"] for h in await get_holidays(yil)}
+    return {p["id"]: compute_normal_target(yil, ay, p["id"], leaves, holidays) for p in personnel}
 
 
 def prev_month(yil: int, ay: int):
@@ -221,8 +227,10 @@ async def do_generate(req: GenerateRequest):
     attempts = 0
     while True:
         leaves = await build_leaves_map(ignored)
+        tinfo = await build_targets(req.yil, req.ay, active, leaves)
+        targets = {k: t["normal_hedef"] for k, t in tinfo.items()}
         schedule, errors = generate_schedule(req.yil, req.ay, active, leaves, req.max_gun_asiri,
-                                             holidays, carry["gunler"])
+                                             holidays, carry["gunler"], targets)
         conflicts = await find_conflicts(errors, ignored, pmap)
         if not errors or not req.rastgele_yoksay or attempts >= 10:
             break
@@ -241,8 +249,11 @@ async def do_generate(req: GenerateRequest):
         {"$set": doc},
         upsert=True,
     )
+    ipucu = None
+    if errors and not any(p.get("fazla_mesai") for p in active):
+        ipucu = "Hiçbir personel fazla mesai için seçili değil. Normal çalışma saatleri dolduğunda kalan görevler atanamaz; Personeller sayfasından fazla mesai yapabilecek personelleri seçin."
     return {"success": len(errors) == 0, "errors": errors, "schedule": doc,
-            "conflicts": conflicts, "ignored": ignored, "carryover": carry}
+            "conflicts": conflicts, "ignored": ignored, "carryover": carry, "ipucu": ipucu}
 
 
 @api_router.post("/schedule/manual")
@@ -256,7 +267,9 @@ async def manual_update(req: ManualUpdateRequest):
     carry = await get_carryover(req.yil, req.ay)
 
     if req.personel_id:
-        ok, msg = validate_manual_assignment(doc, req.tarih, req.slot, req.personel_id, personnel, leaves, carry["gunler"])
+        tinfo = await build_targets(req.yil, req.ay, personnel, leaves)
+        targets = {k: t["normal_hedef"] for k, t in tinfo.items()}
+        ok, msg = validate_manual_assignment(doc, req.tarih, req.slot, req.personel_id, personnel, leaves, carry["gunler"], targets)
         if not ok:
             return {"success": False, "message": f"Kural ihlali: {msg}"}
 
@@ -320,7 +333,9 @@ async def get_violations(yil: int, ay: int):
     personnel = await get_active_personnel_list()
     leaves = await build_leaves_map(doc.get("yoksayilan_istekler"))
     carry = await get_carryover(yil, ay)
-    return {"violations": compute_violations(doc, personnel, leaves, carry["gunler"])}
+    tinfo = await build_targets(yil, ay, personnel, leaves)
+    targets = {k: t["normal_hedef"] for k, t in tinfo.items()}
+    return {"violations": compute_violations(doc, personnel, leaves, carry["gunler"], targets)}
 
 
 # ------------- personel nöbet kartı -------------
@@ -381,18 +396,13 @@ def _register_pdf_font() -> str:
         return "Helvetica"
 
 
-@api_router.get("/schedule/{yil}/{ay}/personnel/{pid}/export/pdf")
-async def personnel_card_pdf(yil: int, ay: int, pid: str):
-    from reportlab.lib.pagesizes import A4
+def _card_elements(p: dict, yil: int, ay: int, items: List[dict], toplam: int) -> list:
     from reportlab.lib import colors
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+    from reportlab.platypus import Table, TableStyle, Paragraph, Spacer
 
-    p, items, toplam = await _personnel_card_data(yil, ay, pid)
     font = _register_pdf_font()
     bold = f"{font}-Bold" if font != "Helvetica" else "Helvetica-Bold"
-    buf = io.BytesIO()
-    pdf = SimpleDocTemplate(buf, pagesize=A4, leftMargin=36, rightMargin=36, topMargin=36, bottomMargin=36)
     styles = getSampleStyleSheet()
     title = ParagraphStyle("t", parent=styles["Title"], fontName=bold)
     body = ParagraphStyle("b", parent=styles["Normal"], fontName=font, fontSize=11)
@@ -417,12 +427,151 @@ async def personnel_card_pdf(yil: int, ay: int, pid: str):
         ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.whitesmoke, colors.white]),
     ]))
     elements.append(t)
-    pdf.build(elements)
+    return elements
+
+
+def _build_pdf(elements: list) -> io.BytesIO:
+    from reportlab.lib.pagesizes import A4
+    from reportlab.platypus import SimpleDocTemplate
+    buf = io.BytesIO()
+    SimpleDocTemplate(buf, pagesize=A4, leftMargin=36, rightMargin=36, topMargin=36, bottomMargin=36).build(elements)
     buf.seek(0)
+    return buf
+
+
+def _safe_name(s: str) -> str:
     from urllib.parse import quote
-    fname = quote(f"nobet_karti_{p['ad_soyad'].replace(' ', '_')}_{yil}_{ay:02d}.pdf")
+    return quote(s)
+
+
+@api_router.get("/schedule/{yil}/{ay}/personnel/{pid}/export/pdf")
+async def personnel_card_pdf(yil: int, ay: int, pid: str):
+    p, items, toplam = await _personnel_card_data(yil, ay, pid)
+    buf = _build_pdf(_card_elements(p, yil, ay, items, toplam))
+    fname = _safe_name(f"nobet_karti_{p['ad_soyad'].replace(' ', '_')}_{yil}_{ay:02d}.pdf")
     return StreamingResponse(buf, media_type="application/pdf",
                              headers={"Content-Disposition": f"attachment; filename*=UTF-8''{fname}"})
+
+
+async def _all_cards(yil: int, ay: int):
+    doc = await db.schedules.find_one({"yil": yil, "ay": ay}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "Liste yok")
+    assigned = {a["personel_id"] for a in doc.get("assignments", [])}
+    personnel = sorted([p for p in await get_active_personnel_list() if p["id"] in assigned],
+                       key=lambda p: p["ad_soyad"])
+    out = []
+    for p in personnel:
+        _, items, toplam = await _personnel_card_data(yil, ay, p["id"])
+        out.append((p, items, toplam))
+    return out
+
+
+@api_router.get("/schedule/{yil}/{ay}/personnel-cards/export/pdf")
+async def all_cards_pdf(yil: int, ay: int):
+    from reportlab.platypus import PageBreak
+    cards = await _all_cards(yil, ay)
+    elements = []
+    for idx, (p, items, toplam) in enumerate(cards):
+        if idx:
+            elements.append(PageBreak())
+        elements += _card_elements(p, yil, ay, items, toplam)
+    return StreamingResponse(_build_pdf(elements), media_type="application/pdf",
+                             headers={"Content-Disposition": f"attachment; filename=nobet_kartlari_{yil}_{ay:02d}.pdf"})
+
+
+@api_router.get("/schedule/{yil}/{ay}/personnel-cards/export/zip")
+async def all_cards_zip(yil: int, ay: int):
+    import zipfile
+    cards = await _all_cards(yil, ay)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for p, items, toplam in cards:
+            pdf = _build_pdf(_card_elements(p, yil, ay, items, toplam))
+            zf.writestr(f"nobet_karti_{p['ad_soyad'].replace(' ', '_')}_{yil}_{ay:02d}.pdf", pdf.getvalue())
+    buf.seek(0)
+    return StreamingResponse(buf, media_type="application/zip",
+                             headers={"Content-Disposition": f"attachment; filename=nobet_kartlari_{yil}_{ay:02d}.zip"})
+
+
+# ------------- atama ön kontrolü / takas önerisi -------------
+class CandidatesRequest(BaseModel):
+    yil: int
+    ay: int
+    tarih: str
+    slot: Literal["saglikci_1", "saglikci_2", "surucu_gunduz", "surucu_gece", "surucu_24"]
+
+
+@api_router.post("/schedule/candidates")
+async def slot_candidates(req: CandidatesRequest):
+    doc = await db.schedules.find_one({"yil": req.yil, "ay": req.ay}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "Nöbet listesi bulunamadı")
+    personnel = await get_active_personnel_list()
+    leaves = await build_leaves_map(doc.get("yoksayilan_istekler"))
+    carry = await get_carryover(req.yil, req.ay)
+    hours = {}
+    for a in doc.get("assignments", []):
+        hours[a["personel_id"]] = hours.get(a["personel_id"], 0) + a["saat"]
+    current = next((g.get(req.slot) for g in doc["gunler"] if g["tarih"] == req.tarih), None)
+    tinfo = await build_targets(req.yil, req.ay, personnel, leaves)
+    targets = {k: t["normal_hedef"] for k, t in tinfo.items()}
+    roles = {"saglikci_1": ("saglikci", "saglikci_surucu"), "saglikci_2": ("saglikci", "saglikci_surucu"),
+             "surucu_gunduz": ("surucu", "saglikci_surucu"), "surucu_gece": ("surucu", "saglikci_surucu"),
+             "surucu_24": ("saglikci_surucu",)}[req.slot]
+    out = []
+    for p in personnel:
+        if not p.get("aktif", True) or p["personel_turu"] not in roles:
+            continue
+        ok, msg = validate_manual_assignment(doc, req.tarih, req.slot, p["id"], personnel, leaves, carry["gunler"], targets)
+        out.append({
+            "personel_id": p["id"], "ad_soyad": p["ad_soyad"], "personel_turu": p["personel_turu"],
+            "uygun": ok, "mesaj": msg, "mevcut": p["id"] == current,
+            "tercih_uyarisi": leaves.get(p["id"], {}).get(req.tarih) == "nobet_istemiyor",
+            "saat": hours.get(p["id"], 0), "hedef_saat": targets.get(p["id"], p.get("hedef_saat", 180)),
+            "fazla_mesai": p.get("fazla_mesai", False),
+        })
+    out.sort(key=lambda c: (not c["uygun"], c["tercih_uyarisi"], c["saat"]))
+    rank = 0
+    for c in out:
+        if c["uygun"] and not c["tercih_uyarisi"] and not c["mevcut"] and rank < 3:
+            c["onerilen"] = True
+            rank += 1
+        else:
+            c["onerilen"] = False
+    return {"adaylar": out}
+
+
+# ------------- ana sayfa özeti -------------
+@api_router.get("/schedule/{yil}/{ay}/summary")
+async def schedule_summary(yil: int, ay: int):
+    doc = await db.schedules.find_one({"yil": yil, "ay": ay}, {"_id": 0})
+    if not doc:
+        return {"exists": False}
+    personnel = await get_active_personnel_list()
+    leaves = await build_leaves_map(doc.get("yoksayilan_istekler"))
+    carry = await get_carryover(yil, ay)
+    tinfo = await build_targets(yil, ay, personnel, leaves)
+    viol = compute_violations(doc, personnel, leaves, carry["gunler"], {k: t["normal_hedef"] for k, t in tinfo.items()})
+    empty = []
+    for g in doc["gunler"]:
+        if not g.get("saglikci_1"):
+            empty.append({"tarih": g["tarih"], "slot": "saglikci_1", "label": "Sağlıkçı 1"})
+        if not g.get("saglikci_2"):
+            empty.append({"tarih": g["tarih"], "slot": "saglikci_2", "label": "Sağlıkçı 2"})
+        if not g.get("surucu_24"):
+            if not g.get("surucu_gunduz"):
+                empty.append({"tarih": g["tarih"], "slot": "surucu_gunduz", "label": "Sürücü 09-21"})
+            if not g.get("surucu_gece"):
+                empty.append({"tarih": g["tarih"], "slot": "surucu_gece", "label": "Sürücü 21-09"})
+    return {
+        "exists": True, "gun_sayisi": len(doc["gunler"]),
+        "hard": [v for v in viol if v["tur"] == "hard"],
+        "soft": [v for v in viol if v["tur"] == "soft"],
+        "bos_gorevler": empty,
+        "yoksayilan_istek_sayisi": len(doc.get("yoksayilan_istekler", [])),
+        "updated_at": doc.get("updated_at"),
+    }
 
 
 # ------------- statistics -------------
@@ -434,14 +583,22 @@ async def get_stats(yil: int, ay: int):
     personnel = await get_active_personnel_list()
     pmap = {p["id"]: p for p in personnel}
     holidays = {h["tarih"] for h in await get_holidays(yil)}
+    leaves = await build_leaves_map()
+    tinfo = await build_targets(yil, ay, personnel, leaves)
 
     stats = {}
     for pid, p in pmap.items():
+        t = tinfo[pid]
         stats[pid] = {
             "personel_id": pid,
             "ad_soyad": p["ad_soyad"],
             "personel_turu": p["personel_turu"],
-            "hedef_saat": p.get("hedef_saat", 0),
+            "hedef_saat": t["normal_hedef"],
+            "normal_hedef": t["normal_hedef"],
+            "hafta_ici_gun": t["hafta_ici_gun"],
+            "tatil_gun": t["tatil_gun"],
+            "izin_gun": t["izin_gun"],
+            "fazla_mesai_secili": p.get("fazla_mesai", False),
             "toplam_saat": 0,
             "toplam_nobet": 0,
             "cumartesi": 0,
@@ -480,8 +637,29 @@ async def get_stats(yil: int, ay: int):
 
     for s in stats.values():
         s["fark"] = s["toplam_saat"] - s["hedef_saat"]
+        s["gerceklesen"] = s["toplam_saat"]
+        s["eksik_saat"] = max(0, s["normal_hedef"] - s["toplam_saat"])
+        s["fazla_mesai"] = max(0, s["toplam_saat"] - s["normal_hedef"])
 
     return {"yil": yil, "ay": ay, "stats": list(stats.values())}
+
+
+@api_router.get("/schedule/{yil}/{ay}/targets")
+async def get_targets(yil: int, ay: int):
+    personnel = await get_active_personnel_list()
+    leaves = await build_leaves_map()
+    tinfo = await build_targets(yil, ay, personnel, leaves)
+    return {"yil": yil, "ay": ay, "targets": [
+        {"personel_id": p["id"], "ad_soyad": p["ad_soyad"], **tinfo[p["id"]]} for p in personnel]}
+
+
+@api_router.post("/personnel/fazla-mesai")
+async def set_overtime(data: dict):
+    ids = set(data.get("personel_ids", []))
+    await db.personnel.update_many({}, {"$set": {"fazla_mesai": False}})
+    if ids:
+        await db.personnel.update_many({"id": {"$in": list(ids)}}, {"$set": {"fazla_mesai": True}})
+    return {"secili": len(ids)}
 
 
 # ------------- holidays -------------

@@ -8,10 +8,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { Trash2, Pencil, Plus, UserPlus } from "lucide-react";
+import { Trash2, Pencil, UserPlus, Clock } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
 
-const emptyForm = { ad_soyad: "", personel_turu: "saglikci", aktif: true, hedef_saat: 180, aciklama: "" };
+const emptyForm = { ad_soyad: "", personel_turu: "saglikci", aktif: true, hedef_saat: 180, aciklama: "", fazla_mesai: false, surucu_tercihi: "yok" };
+const TERCIH_LABELS = { "12": "12s sürücü", "24": "24s sürücü", yok: "Tercih yok" };
 
 export default function Personnel() {
   const [list, setList] = useState([]);
@@ -27,7 +29,8 @@ export default function Personnel() {
 
   const openNew = () => { setForm(emptyForm); setEditingId(null); setOpen(true); };
   const openEdit = (p) => {
-    setForm({ ad_soyad: p.ad_soyad, personel_turu: p.personel_turu, aktif: p.aktif, hedef_saat: p.hedef_saat, aciklama: p.aciklama || "" });
+    setForm({ ad_soyad: p.ad_soyad, personel_turu: p.personel_turu, aktif: p.aktif, hedef_saat: p.hedef_saat, aciklama: p.aciklama || "",
+      fazla_mesai: !!p.fazla_mesai, surucu_tercihi: p.surucu_tercihi || "yok" });
     setEditingId(p.id);
     setOpen(true);
   };
@@ -44,6 +47,17 @@ export default function Personnel() {
       }
       setOpen(false); load();
     } catch (e) { toast.error("Hata: " + e.message); }
+  };
+
+  const toggleOvertime = async (p) => {
+    await api.patch(`/personnel/${p.id}`, { fazla_mesai: !p.fazla_mesai });
+    load();
+  };
+
+  const setAllOvertime = async (on) => {
+    await api.post("/personnel/fazla-mesai", { personel_ids: on ? list.filter((x) => x.aktif).map((x) => x.id) : [] });
+    toast.success(on ? "Tüm aktif personel fazla mesai için seçildi" : "Fazla mesai seçimleri kaldırıldı");
+    load();
   };
 
   const remove = async (id) => {
@@ -65,6 +79,28 @@ export default function Personnel() {
         </Button>
       </div>
 
+      <Card data-testid="overtime-card">
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 font-heading text-base"><Clock className="w-5 h-5 text-amber-600" /> Fazla Mesai Yapmak İsteyen Personeller</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-sm text-muted-foreground">Önce tüm personelin normal çalışma saati (hafta içi gün × 8s − tatil − izin) doldurulur; kalan görevler yalnızca burada seçili personele fazla mesai olarak, adil biçimde dağıtılır.</p>
+          <div className="flex flex-wrap gap-2">
+            {list.filter((x) => x.aktif).map((x) => (
+              <label key={x.id} className={`flex items-center gap-2 px-3 py-1.5 rounded-full border text-sm cursor-pointer transition-colors ${x.fazla_mesai ? "bg-amber-50 border-amber-300 text-amber-900" : "border-border hover:bg-secondary"}`} data-testid={`overtime-chip-${x.id}`}>
+                <Checkbox checked={!!x.fazla_mesai} onCheckedChange={() => toggleOvertime(x)} data-testid={`overtime-check-${x.id}`} />
+                {x.ad_soyad}
+              </label>
+            ))}
+          </div>
+          <div className="flex gap-2 text-xs">
+            <Button size="sm" variant="outline" onClick={() => setAllOvertime(true)} data-testid="overtime-all-btn">Tümünü Seç</Button>
+            <Button size="sm" variant="ghost" onClick={() => setAllOvertime(false)} data-testid="overtime-none-btn">Temizle</Button>
+            <span className="self-center text-muted-foreground" data-testid="overtime-count">{list.filter((x) => x.fazla_mesai && x.aktif).length} personel seçili</span>
+          </div>
+        </CardContent>
+      </Card>
+
       <Card>
         <CardContent className="p-0">
           <div className="overflow-x-auto">
@@ -73,14 +109,15 @@ export default function Personnel() {
                 <TableRow>
                   <TableHead>Ad Soyad</TableHead>
                   <TableHead>Personel Türü</TableHead>
-                  <TableHead className="text-right">Hedef Saat</TableHead>
+                  <TableHead>Sürücü Tercihi</TableHead>
+                  <TableHead>Fazla Mesai</TableHead>
                   <TableHead>Durum</TableHead>
                   <TableHead className="text-right">İşlem</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {list.length === 0 && (
-                  <TableRow><TableCell colSpan={5} className="text-center text-muted-foreground py-8">Henüz personel yok</TableCell></TableRow>
+                  <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground py-8">Henüz personel yok</TableCell></TableRow>
                 )}
                 {list.map((p) => (
                   <TableRow key={p.id} data-testid={`personnel-row-${p.id}`}>
@@ -90,7 +127,8 @@ export default function Personnel() {
                         {PERSONNEL_LABELS[p.personel_turu]}
                       </span>
                     </TableCell>
-                    <TableCell className="text-right font-mono">{p.hedef_saat}</TableCell>
+                    <TableCell className="text-xs">{p.personel_turu === "saglikci_surucu" ? TERCIH_LABELS[p.surucu_tercihi || "yok"] : <span className="text-muted-foreground">—</span>}</TableCell>
+                    <TableCell>{p.fazla_mesai ? <span className="text-xs font-semibold text-amber-700">Evet</span> : <span className="text-xs text-muted-foreground">Hayır</span>}</TableCell>
                     <TableCell>
                       {p.aktif
                         ? <span className="text-xs font-semibold text-green-700">Aktif</span>
@@ -133,9 +171,26 @@ export default function Personnel() {
                 </SelectContent>
               </Select>
             </div>
-            <div>
-              <Label>Hedef Aylık Çalışma Saati</Label>
-              <Input type="number" value={form.hedef_saat} onChange={(e) => setForm({ ...form, hedef_saat: Number(e.target.value) })} data-testid="input-hedef-saat" />
+            {form.personel_turu === "saglikci_surucu" && (
+              <div>
+                <Label>Sürücü Nöbet Tercihi</Label>
+                <Select value={form.surucu_tercihi} onValueChange={(v) => setForm({ ...form, surucu_tercihi: v })}>
+                  <SelectTrigger data-testid="select-surucu-tercihi"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="12">12 saat sürücü istiyorum</SelectItem>
+                    <SelectItem value="24">24 saat sürücü istiyorum</SelectItem>
+                    <SelectItem value="yok">Tercihim yok</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground mt-1">24s sürücü nöbetinde ayrıca 12s sürücü atanmaz (2 sağlıkçı + 1×24s sürücü).</p>
+              </div>
+            )}
+            <div className="flex items-center justify-between">
+              <div>
+                <Label>Fazla Mesai Yapabilir</Label>
+                <p className="text-xs text-muted-foreground">Normal hedefin üzerinde görev alabilir</p>
+              </div>
+              <Switch checked={form.fazla_mesai} onCheckedChange={(v) => setForm({ ...form, fazla_mesai: v })} data-testid="switch-fazla-mesai" />
             </div>
             <div>
               <Label>Açıklama</Label>

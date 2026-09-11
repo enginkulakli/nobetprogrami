@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { api, PERSONNEL_LABELS, MONTHS_TR } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Users, Stethoscope, Car, UserCog, CalendarClock, ListChecks, Sparkles } from "lucide-react";
+import { Users, Stethoscope, Car, UserCog, CalendarClock, ListChecks, Sparkles, AlertTriangle, Info, CircleDashed, ShieldCheck } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { Link } from "react-router-dom";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
@@ -12,12 +13,15 @@ export default function Dashboard() {
   const [yil, setYil] = useState(new Date().getFullYear());
   const [ay, setAy] = useState(new Date().getMonth() + 1);
   const [scheduleStatus, setScheduleStatus] = useState(null);
+  const [summary, setSummary] = useState(null);
 
   const load = async () => {
     const p = await api.get("/personnel");
     setPersonnel(p.data);
     const s = await api.get(`/schedule/${yil}/${ay}`);
     setScheduleStatus(s.data);
+    const sm = await api.get(`/schedule/${yil}/${ay}/summary`);
+    setSummary(sm.data);
   };
 
   useEffect(() => { load(); }, [yil, ay]);
@@ -75,6 +79,8 @@ export default function Dashboard() {
         <StatCard icon={UserCog} label="Sağlıkçı + Sürücü" value={counts.saglikci_surucu || 0} testid="stat-hybrid" />
       </div>
 
+      {summary?.exists && <SummaryCard summary={summary} />}
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <Card className="lg:col-span-2">
           <CardHeader>
@@ -123,6 +129,54 @@ export default function Dashboard() {
             )}
           </CardContent>
         </Card>
+      </div>
+    </div>
+  );
+}
+
+function SummaryCard({ summary }) {
+  const hard = summary.hard.length, soft = summary.soft.length, empty = summary.bos_gorevler.length;
+  const clean = hard === 0 && empty === 0;
+  return (
+    <Card className={clean ? "border-emerald-200" : "border-orange-300"} data-testid="summary-card">
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2 font-heading text-base">
+          {clean ? <ShieldCheck className="w-5 h-5 text-emerald-600" /> : <AlertTriangle className="w-5 h-5 text-orange-600" />}
+          Bu Ayın Durumu
+          {clean && <Badge className="bg-emerald-600 text-white ml-1">Sorun yok</Badge>}
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        <div className="grid grid-cols-3 gap-3">
+          <MiniStat icon={AlertTriangle} label="Kural İhlali" value={hard} tone="red" testid="summary-hard" />
+          <MiniStat icon={Info} label="Tercih Uyarısı" value={soft} tone="amber" testid="summary-soft" />
+          <MiniStat icon={CircleDashed} label="Boş Görev" value={empty} tone="slate" testid="summary-empty" />
+        </div>
+        {(hard > 0 || empty > 0) && (
+          <div className="mt-4 space-y-1 text-sm max-h-32 overflow-y-auto" data-testid="summary-details">
+            {summary.hard.slice(0, 5).map((v, i) => (
+              <div key={i} className="flex gap-2 text-red-700"><span className="font-mono text-xs">{v.tarih}</span><span>{v.mesaj}</span></div>
+            ))}
+            {summary.bos_gorevler.slice(0, 5).map((e, i) => (
+              <div key={i} className="flex gap-2 text-muted-foreground"><span className="font-mono text-xs">{e.tarih}</span><span>{e.label} boş</span></div>
+            ))}
+            {(hard + empty) > 10 && <div className="text-xs text-muted-foreground">...ve daha fazlası</div>}
+          </div>
+        )}
+        <Link to="/nobet" className="inline-block mt-4"><Button size="sm" variant={clean ? "outline" : "default"} data-testid="summary-open-btn">Listede Göster</Button></Link>
+      </CardContent>
+    </Card>
+  );
+}
+
+function MiniStat({ icon: Icon, label, value, tone, testid }) {
+  const tones = { red: "bg-red-50 text-red-700", amber: "bg-amber-50 text-amber-700", slate: "bg-secondary text-foreground" };
+  return (
+    <div className={`rounded-md p-3 flex items-center gap-3 ${value > 0 ? tones[tone] : "bg-secondary/60 text-muted-foreground"}`} data-testid={testid}>
+      <Icon className="w-4 h-4 shrink-0" />
+      <div>
+        <div className="text-[10px] font-bold uppercase tracking-wider">{label}</div>
+        <div className="text-xl font-heading font-extrabold leading-none mt-0.5">{value}</div>
       </div>
     </div>
   );

@@ -6,7 +6,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { Sparkles, FileSpreadsheet, FileText, Pencil, AlertTriangle, Printer, Flag, ListX, LayoutTemplate, IdCard, Info } from "lucide-react";
+import { Sparkles, FileSpreadsheet, FileText, Pencil, AlertTriangle, Printer, Flag, ListX, LayoutTemplate, IdCard, Info, CheckCircle2, XCircle, ArrowLeftRight, Star } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { PersonnelCardDialog } from "@/components/schedule/PersonnelCardDialog";
 import { Badge } from "@/components/ui/badge";
@@ -32,11 +32,13 @@ export default function Schedule() {
   const [editing, setEditing] = useState(null); // { tarih, slot, currentPid }
   const [holidays, setHolidays] = useState({});
   const [conflicts, setConflicts] = useState([]);
+  const [hint, setHint] = useState(null);
   const [conflictOpen, setConflictOpen] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const [tplId, setTplId] = useState("");
   const [violations, setViolations] = useState({});
   const [cardOpen, setCardOpen] = useState(false);
+  const [candidates, setCandidates] = useState(null);
   const { templates } = useTemplates();
 
   const pmap = useMemo(() => Object.fromEntries(personnel.map((p) => [p.id, p])), [personnel]);
@@ -73,6 +75,7 @@ export default function Schedule() {
       setSchedule(r.data.schedule);
       setErrors(r.data.errors || []);
       setConflicts(r.data.conflicts || []);
+      setHint(r.data.ipucu || null);
       loadViolations();
       setRefreshKey((k) => k + 1);
       if (r.data.success) {
@@ -95,8 +98,12 @@ export default function Schedule() {
     } catch (e) { toast.error("Şablon uygulanamadı: " + e.message); }
   };
 
-  const openEdit = (tarih, slot, currentPid) => {
-    setEditing({ tarih, slot, currentPid });
+  const openEdit = (tarih, slot, currentPid, swap = false) => {
+    setEditing({ tarih, slot, currentPid, swap });
+    setCandidates(null);
+    api.post("/schedule/candidates", { yil, ay, tarih, slot })
+      .then((r) => setCandidates(r.data.adaylar))
+      .catch(() => setCandidates([]));
   };
 
   const applyEdit = async (newPid) => {
@@ -117,17 +124,6 @@ export default function Schedule() {
 
   const exportExcel = () => window.open(`${api.defaults.baseURL}/schedule/${yil}/${ay}/export/excel`, "_blank");
   const exportPdf = () => window.open(`${api.defaults.baseURL}/schedule/${yil}/${ay}/export/pdf`, "_blank");
-
-  const eligiblePersonnel = (slot) => {
-    if (!editing) return [];
-    if (slot === "saglikci_1" || slot === "saglikci_2") {
-      return personnel.filter((p) => p.aktif && (p.personel_turu === "saglikci" || p.personel_turu === "saglikci_surucu"));
-    }
-    if (slot === "surucu_24") {
-      return personnel.filter((p) => p.aktif && p.personel_turu === "saglikci_surucu");
-    }
-    return personnel.filter((p) => p.aktif && (p.personel_turu === "surucu" || p.personel_turu === "saglikci_surucu"));
-  };
 
   return (
     <TooltipProvider delayDuration={150}>
@@ -270,6 +266,7 @@ export default function Schedule() {
                             violation={violations[`${day.tarih}|${s.key}`]}
                             has24Driver={!!day.surucu_24}
                             onEdit={() => openEdit(day.tarih, s.key, day[s.key])}
+                            onSwap={() => openEdit(day.tarih, s.key, day[s.key], true)}
                           />
                         ))}
                       </TableRow>
@@ -287,6 +284,7 @@ export default function Schedule() {
         onClose={() => setConflictOpen(false)}
         conflicts={conflicts}
         errors={errors}
+        hint={hint}
         loading={loading}
         onRegenerate={(extra) => generate({ ...extra, ignore_leave_ids: [...(schedule?.yoksayilan_istekler || []), ...(extra.ignore_leave_ids || [])] })}
       />
@@ -296,13 +294,16 @@ export default function Schedule() {
       <Dialog open={!!editing} onOpenChange={(o) => !o && setEditing(null)}>
         <DialogContent data-testid="edit-slot-dialog">
           <DialogHeader>
-            <DialogTitle>
-              {editing && SLOTS.find(s => s.key === editing.slot)?.label} - {editing?.tarih}
+            <DialogTitle className="flex items-center gap-2">
+              {editing?.swap && <ArrowLeftRight className="w-4 h-4 text-primary" />}
+              {editing?.swap ? "Takas Önerisi: " : ""}{editing && SLOTS.find(s => s.key === editing.slot)?.label} - {editing?.tarih}
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-3">
-            <div className="text-sm text-muted-foreground">Personel seçin:</div>
-            <div className="max-h-80 overflow-y-auto space-y-1">
+            <div className="text-sm text-muted-foreground">
+              {editing?.swap ? "Kuralları bozmayan alternatifler önce listelenir; birine tıklayınca değişir." : "Personel seçin — uygunluk anında kontrol edilir:"}
+            </div>
+            <div className="max-h-80 overflow-y-auto space-y-1" data-testid="candidate-list">
               <button
                 onClick={() => applyEdit(null)}
                 className="w-full text-left px-3 py-2 rounded-md hover:bg-secondary text-sm"
@@ -310,17 +311,37 @@ export default function Schedule() {
               >
                 — Boşalt —
               </button>
-              {editing && eligiblePersonnel(editing.slot).map((p) => (
+              {candidates === null && <div className="text-xs text-muted-foreground px-3 py-2">Kontrol ediliyor...</div>}
+              {candidates && editing?.swap && !candidates.some((c) => c.uygun && !c.mevcut) && (
+                <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-3 py-2" data-testid="no-alternative-msg">
+                  Kuralları bozmayan alternatif bulunamadı. Komşu günlerdeki atamaları değiştirmeyi veya görevi boşaltmayı deneyin.
+                </div>
+              )}
+              {candidates?.map((c) => (
                 <button
-                  key={p.id}
-                  onClick={() => applyEdit(p.id)}
-                  data-testid={`assign-${p.id}`}
-                  className={`w-full text-left px-3 py-2 rounded-md hover:bg-secondary text-sm flex justify-between items-center ${
-                    editing.currentPid === p.id ? "bg-primary/10 font-semibold" : ""
+                  key={c.personel_id}
+                  onClick={() => applyEdit(c.personel_id)}
+                  disabled={!c.uygun && !c.mevcut}
+                  data-testid={`assign-${c.personel_id}`}
+                  data-uygun={c.uygun}
+                  className={`w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2 ${
+                    c.mevcut ? "bg-primary/10 font-semibold" : c.uygun ? "hover:bg-secondary" : "opacity-60 cursor-not-allowed"
                   }`}
                 >
-                  <span>{p.ad_soyad}</span>
-                  <span className="text-xs text-muted-foreground">{PERSONNEL_LABELS[p.personel_turu]}</span>
+                  {c.uygun
+                    ? <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                    : <XCircle className="w-4 h-4 text-red-500 shrink-0" />}
+                  <span className="flex-1 min-w-0">
+                    <span className="flex items-center gap-1.5">
+                      {c.ad_soyad}
+                      {c.onerilen && <Badge className="bg-emerald-600 text-white text-[10px] px-1.5 py-0 h-4"><Star className="w-2.5 h-2.5 mr-0.5" />Önerilen</Badge>}
+                      {c.mevcut && <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4">Mevcut</Badge>}
+                    </span>
+                    <span className={`block text-xs ${c.uygun ? "text-muted-foreground" : "text-red-600"}`} data-testid={`candidate-reason-${c.personel_id}`}>
+                      {!c.uygun ? c.mesaj : c.tercih_uyarisi ? "Uygun · \"nöbet istemiyorum\" tercihi var" : "Uygun"}
+                    </span>
+                  </span>
+                  <span className="text-xs text-muted-foreground font-mono shrink-0">{c.saat}/{c.hedef_saat}s</span>
                 </button>
               ))}
             </div>
@@ -335,28 +356,30 @@ export default function Schedule() {
   );
 }
 
-function ViolationBadge({ violation, tarih, slot }) {
+function ViolationBadge({ violation, tarih, slot, onSwap }) {
   if (!violation) return null;
   const hard = violation.tur === "hard";
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <span
-          className={`inline-flex items-center justify-center w-4 h-4 rounded-full cursor-help ${hard ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-700"}`}
+        <button
+          onClick={onSwap}
+          className={`inline-flex items-center justify-center w-4 h-4 rounded-full cursor-pointer hover:scale-110 transition-transform ${hard ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-700"}`}
           data-testid={`violation-badge-${tarih}-${slot}`}
         >
           {hard ? <AlertTriangle className="w-2.5 h-2.5" /> : <Info className="w-2.5 h-2.5" />}
-        </span>
+        </button>
       </TooltipTrigger>
       <TooltipContent className="max-w-xs" data-testid={`violation-tooltip-${tarih}-${slot}`}>
         <div className="text-xs font-semibold">{hard ? "Kural ihlali" : "Tercih uyarısı"}</div>
         <div className="text-xs">{violation.mesaj}</div>
+        <div className="text-[10px] mt-1 opacity-80 flex items-center gap-1"><ArrowLeftRight className="w-2.5 h-2.5" /> Takas önerisi için tıklayın</div>
       </TooltipContent>
     </Tooltip>
   );
 }
 
-function SlotCell({ slot, personName, has24Driver, onEdit, violation }) {
+function SlotCell({ slot, personName, has24Driver, onEdit, onSwap, violation }) {
   // hide 12h driver slots when 24h driver is set
   if (has24Driver && (slot.key === "surucu_gunduz" || slot.key === "surucu_gece")) {
     return <TableCell className="text-muted-foreground text-xs italic">— 24s aktif —</TableCell>;
@@ -380,7 +403,7 @@ function SlotCell({ slot, personName, has24Driver, onEdit, violation }) {
         <span>{personName || <span className="text-muted-foreground italic">Boş</span>}</span>
         <Pencil className="w-3 h-3 opacity-0 group-hover:opacity-100" />
       </button>
-      <ViolationBadge violation={violation} tarih={violation?.tarih} slot={slot.key} />
+      <ViolationBadge violation={violation} tarih={violation?.tarih} slot={slot.key} onSwap={onSwap} />
     </TableCell>
   );
 }

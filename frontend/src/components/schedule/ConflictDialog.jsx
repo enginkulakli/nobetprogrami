@@ -11,7 +11,7 @@ const DURUM = {
   nobet_istemiyor: { label: "Nöbet İstemiyor", cls: "bg-amber-100 text-amber-800 border-amber-200" },
 };
 
-export function ConflictDialog({ open, onClose, conflicts, errors, onRegenerate, loading }) {
+export function ConflictDialog({ open, onClose, conflicts, errors, onRegenerate, loading, hint }) {
   const [selected, setSelected] = useState([]);
   useEffect(() => { if (open) setSelected([]); }, [open]);
 
@@ -26,6 +26,10 @@ export function ConflictDialog({ open, onClose, conflicts, errors, onRegenerate,
             {errors.length} gün/görev atanamadı. Aşağıdaki isteklerden göz ardı edileceklerini seçin ve listeyi yeniden oluşturun.
           </DialogDescription>
         </DialogHeader>
+
+        {hint && (
+          <div className="text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded-md p-3" data-testid="conflict-hint">{hint}</div>
+        )}
 
         {conflicts.length === 0 ? (
           <div className="text-sm text-muted-foreground p-4 rounded-md bg-secondary" data-testid="conflict-empty">

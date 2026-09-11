@@ -19,9 +19,9 @@ export default function Statistics() {
 
   const chartData = stats.map((s) => ({
     name: s.ad_soyad.split(" ")[0],
-    Saat: s.toplam_saat,
-    Hedef: s.hedef_saat,
-    HaftaSonu: s.hafta_sonu,
+    Normal: Math.min(s.toplam_saat, s.normal_hedef),
+    FazlaMesai: s.fazla_mesai,
+    Hedef: s.normal_hedef,
   }));
 
   return (
@@ -52,7 +52,10 @@ export default function Statistics() {
       {stats.length > 0 && (
         <>
           <Card>
-            <CardHeader><CardTitle className="font-heading">Çalışma Saati vs Hedef</CardTitle></CardHeader>
+            <CardHeader>
+              <CardTitle className="font-heading">Çalışma Saati vs Normal Hedef</CardTitle>
+              <p className="text-xs text-muted-foreground">Normal hedef = hafta içi gün × 8s − hafta içi resmî tatil − hafta içi yıllık izin (otomatik hesaplanır)</p>
+            </CardHeader>
             <CardContent className="h-72">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={chartData}>
@@ -61,8 +64,9 @@ export default function Statistics() {
                   <YAxis tick={{ fontSize: 12 }} />
                   <Tooltip contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))" }} />
                   <Legend />
-                  <Bar dataKey="Saat" fill="hsl(var(--primary))" radius={[4,4,0,0]} />
-                  <Bar dataKey="Hedef" fill="hsl(var(--muted-foreground))" radius={[4,4,0,0]} />
+                  <Bar dataKey="Normal" stackId="a" fill="hsl(var(--primary))" name="Normal Çalışma" />
+                  <Bar dataKey="FazlaMesai" stackId="a" fill="#f59e0b" name="Fazla Mesai" radius={[4,4,0,0]} />
+                  <Bar dataKey="Hedef" fill="hsl(var(--muted-foreground))" name="Normal Hedef" radius={[4,4,0,0]} />
                 </BarChart>
               </ResponsiveContainer>
             </CardContent>
@@ -78,9 +82,11 @@ export default function Statistics() {
                       <TableHead>Personel</TableHead>
                       <TableHead>Tür</TableHead>
                       <TableHead className="text-right">Nöbet</TableHead>
-                      <TableHead className="text-right">Saat</TableHead>
-                      <TableHead className="text-right">Hedef</TableHead>
-                      <TableHead className="text-right">Fark</TableHead>
+                      <TableHead className="text-right">Normal Hedef</TableHead>
+                      <TableHead className="text-right">Gerçekleşen</TableHead>
+                      <TableHead className="text-right">Eksik</TableHead>
+                      <TableHead className="text-right">Fazla Mesai</TableHead>
+                      <TableHead className="text-right">Toplam</TableHead>
                       <TableHead className="text-right">Cts</TableHead>
                       <TableHead className="text-right">Paz</TableHead>
                       <TableHead className="text-right">H.Sonu</TableHead>
@@ -96,11 +102,13 @@ export default function Statistics() {
                         <TableCell className="font-medium">{s.ad_soyad}</TableCell>
                         <TableCell className="text-xs">{PERSONNEL_LABELS[s.personel_turu]}</TableCell>
                         <TableCell className="text-right font-mono">{s.toplam_nobet}</TableCell>
-                        <TableCell className="text-right font-mono">{s.toplam_saat}</TableCell>
-                        <TableCell className="text-right font-mono text-muted-foreground">{s.hedef_saat}</TableCell>
-                        <TableCell className={`text-right font-mono font-semibold ${s.fark < 0 ? "text-orange-600" : s.fark > 0 ? "text-blue-600" : "text-green-600"}`}>
-                          {s.fark > 0 ? "+" : ""}{s.fark}
+                        <TableCell className="text-right font-mono text-muted-foreground" data-testid={`normal-hedef-${s.personel_id}`} title={`${s.hafta_ici_gun} hafta içi gün − ${s.tatil_gun} tatil − ${s.izin_gun} izin`}>{s.normal_hedef}</TableCell>
+                        <TableCell className="text-right font-mono" data-testid={`gerceklesen-${s.personel_id}`}>{s.gerceklesen}</TableCell>
+                        <TableCell className={`text-right font-mono ${s.eksik_saat > 0 ? "text-orange-600 font-semibold" : "text-muted-foreground"}`} data-testid={`eksik-${s.personel_id}`}>{s.eksik_saat}</TableCell>
+                        <TableCell className={`text-right font-mono ${s.fazla_mesai > 0 ? "text-amber-600 font-semibold" : "text-muted-foreground"}`} data-testid={`fazla-mesai-${s.personel_id}`}>
+                          {s.fazla_mesai}{s.fazla_mesai_secili && <span className="ml-1 text-[10px] text-amber-700" title="Fazla mesai için seçili">●</span>}
                         </TableCell>
+                        <TableCell className="text-right font-mono font-semibold" data-testid={`toplam-${s.personel_id}`}>{s.toplam_saat}</TableCell>
                         <TableCell className="text-right font-mono">{s.cumartesi}</TableCell>
                         <TableCell className="text-right font-mono">{s.pazar}</TableCell>
                         <TableCell className="text-right font-mono font-semibold">{s.hafta_sonu}</TableCell>

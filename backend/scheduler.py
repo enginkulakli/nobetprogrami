@@ -29,6 +29,20 @@ TASKS = {
 }
 
 
+def compute_normal_target(yil: int, ay: int, pid: str, leaves: Dict[str, Dict[str, str]], holidays: set) -> dict:
+    """Hafta içi gün × 8 − hafta içi resmi tatil − hafta içi yıllık izin."""
+    weekdays = [d for d in _iter_days(yil, ay) if d.weekday() < 5]
+    tatil = [d for d in weekdays if d.isoformat() in holidays]
+    izin = [d for d in weekdays if d.isoformat() not in holidays
+            and leaves.get(pid, {}).get(d.isoformat()) == "yillik_izin"]
+    return {
+        "hafta_ici_gun": len(weekdays),
+        "tatil_gun": len(tatil),
+        "izin_gun": len(izin),
+        "normal_hedef": max(0, (len(weekdays) - len(tatil) - len(izin)) * 8),
+    }
+
+
 def _iter_days(yil: int, ay: int) -> List[date]:
     _, days_in_month = monthrange(yil, ay)
     return [date(yil, ay, d) for d in range(1, days_in_month + 1)]
@@ -57,11 +71,12 @@ def _task_datetime_range(d: date, task: str) -> Tuple[float, float]:
 class SchedulerContext:
     """Tracks state during generation for hard-constraint checking & soft balancing."""
     def __init__(self, personnel: List[dict], leaves: Dict[str, Dict[str, str]],
-                 holidays: Optional[set] = None):
+                 holidays: Optional[set] = None, targets: Optional[Dict[str, int]] = None):
         # personnel: list of dicts with id, personel_turu, aktif, hedef_saat, ad_soyad
         self.personnel = {p["id"]: p for p in personnel if p.get("aktif", True)}
         self.leaves = leaves  # {pid: {date_iso: status}}
         self.holidays = holidays or set()  # iso date strings
+        self.targets = targets or {}  # pid -> normal aylık hedef saat
         # per-personnel tracking
         self.pid_assignments: Dict[str, List[Tuple[date, str, float, float]]] = {
             pid: [] for pid in self.personnel
@@ -159,6 +174,11 @@ class SchedulerContext:
             if consec >= 3:
                 return False, "Sürücü 3 günden fazla üst üste çalışamaz"
 
+        # 6) fazla mesai: seçilmeyen personel normal hedefin üzerine çıkamaz
+        if pid in self.targets and not p.get("fazla_mesai", False):
+            if self.hours[pid] + int(TASKS[task]["hours"]) > self.targets[pid]:
+                return False, "Normal çalışma hedefi doldu (fazla mesai seçili değil)"
+
         return True, ""
 
     def assign(self, pid: str, d: date, task: str, count_stats: bool = True):
@@ -190,10 +210,20 @@ class SchedulerContext:
     def score_candidate(self, pid: str, d: date, task: str) -> float:
         p = self.personnel[pid]
         score = 0.0
-        hedef = max(1, p.get("hedef_saat", 180))
+        hedef = max(1, self.targets.get(pid, p.get("hedef_saat", 180)))
         # 1) çalışma saatleri dengesi (hedeften uzaklık)
         proj_hours = self.hours[pid] + TASKS[task]["hours"]
         score += (proj_hours / hedef) * 10.0
+        # 1b) önce normal saatler dolsun; fazla mesai seçililer arasında adil dağılsın
+        if proj_hours > hedef:
+            overtime = proj_hours - hedef
+            score += 60.0 + overtime * 1.0
+        # 1c) sürücü tercihi (12s / 24s)
+        tercih = p.get("surucu_tercihi", "yok")
+        if task == "surucu_24" and tercih == "12":
+            score += 30.0
+        if task in ("surucu_gunduz", "surucu_gece") and tercih == "24":
+            score += 10.0
         # 2) toplam nöbet sayısı
         score += self.total_shifts[pid] * 1.5
         # 3) hafta sonu dengesi
@@ -210,8 +240,8 @@ class SchedulerContext:
         # 5) nöbet istemiyor tercihi
         if self.leaves.get(pid, {}).get(d.isoformat()) == "nobet_istemiyor":
             score += 20.0
-        # 6) 24h sürücü tercih edilmesin (soft, sadece gerektiğinde)
-        if task == "surucu_24":
+        # 6) 24h sürücü: tercih etmeyenler için soft ceza
+        if task == "surucu_24" and tercih != "24":
             score += 15.0
         # tiebreaker: rastgele küçük
         score += random.random() * 0.01
@@ -238,11 +268,12 @@ def generate_schedule(
     max_gun_asiri: int = 3,
     holidays: Optional[set] = None,
     carryover_days: Optional[List[dict]] = None,
+    targets: Optional[Dict[str, int]] = None,
 ) -> Tuple[MonthlySchedule, List[str]]:
     """
     Returns (MonthlySchedule, errors). errors non-empty means partial/failed.
     """
-    ctx = SchedulerContext(personnel, leaves, holidays)
+    ctx = SchedulerContext(personnel, leaves, holidays, targets)
     ctx.preload_days(carryover_days or [])
     days = _iter_days(yil, ay)
     schedule = MonthlySchedule(yil=yil, ay=ay, gunler=[], assignments=[])
@@ -289,8 +320,20 @@ def generate_schedule(
                 tarih=d.isoformat(), personel_id=s2, gorev="saglikci_24",
                 baslangic="08:00", bitis="08:00", saat=24))
 
-        # Step 2: sürücü ata - önce 12h iki vardiya dene, olmazsa 24h sürücü
+        # Step 2: sürücü ata - 24s tercihli Sağlıkçı+Sürücü varsa 24s; yoksa 12h iki vardiya, olmazsa 24h
         used_pids = {s1, s2}
+        pool_24_pref = [p for p in surucu_24_ids if p not in used_pids
+                        and ctx.personnel[p].get("surucu_tercihi") == "24"]
+        s24_pref = _pick_best(ctx, pool_24_pref, d, "surucu_24", max_gun_asiri)
+        if s24_pref:
+            ctx.assign(s24_pref, d, "surucu_24")
+            day.surucu_24 = s24_pref
+            schedule.assignments.append(Assignment(
+                tarih=d.isoformat(), personel_id=s24_pref, gorev="surucu_24",
+                baslangic="08:00", bitis="08:00", saat=24))
+            schedule.gunler.append(day)
+            continue
+
         pool_g = [p for p in surucu_12_ids if p not in used_pids]
         gunduz = _pick_best(ctx, pool_g, d, "surucu_gunduz", max_gun_asiri)
         pool_n = [p for p in surucu_12_ids if p not in used_pids and p != gunduz]
@@ -334,12 +377,13 @@ def validate_manual_assignment(
     personnel: List[dict],
     leaves: Dict[str, Dict[str, str]],
     carryover_days: Optional[List[dict]] = None,
+    targets: Optional[Dict[str, int]] = None,
 ) -> Tuple[bool, str]:
     """Validates changing a single slot manually against all hard rules."""
     if new_pid is None:
         return True, ""
     # rebuild context up to this schedule
-    ctx = SchedulerContext(personnel, leaves)
+    ctx = SchedulerContext(personnel, leaves, None, targets)
     ctx.preload_days(carryover_days or [])
     slot_to_task = SLOT_TO_TASK
     task_new = slot_to_task[slot]
@@ -355,9 +399,7 @@ def validate_manual_assignment(
             # skip the slot being replaced
             if day["tarih"] == tarih and s_slot == slot:
                 continue
-            ok, _ = ctx.can_assign(pid, dd, s_task)
-            if ok:
-                ctx.assign(pid, dd, s_task)
+            ctx.assign(pid, dd, s_task)
 
     ok, msg = ctx.can_assign(new_pid, dt_new, task_new)
     return ok, msg
@@ -368,6 +410,7 @@ def compute_violations(
     personnel: List[dict],
     leaves: Dict[str, Dict[str, str]],
     carryover_days: Optional[List[dict]] = None,
+    targets: Optional[Dict[str, int]] = None,
 ) -> List[dict]:
     """Her dolu hücre için diğer tüm atamalara göre kural ihlali / tercih uyarısı üretir."""
     cells = []
@@ -379,12 +422,12 @@ def compute_violations(
 
     out = []
     for tarih, slot, task, pid in cells:
-        ctx = SchedulerContext(personnel, leaves)
+        ctx = SchedulerContext(personnel, leaves, None, targets)
         ctx.preload_days(carryover_days or [])
         for t2, s2, task2, pid2 in cells:
             if (t2, s2) == (tarih, slot) or pid2 not in ctx.personnel:
                 continue
-            ctx.assign(pid2, date.fromisoformat(t2), task2, count_stats=False)
+            ctx.assign(pid2, date.fromisoformat(t2), task2, count_stats=(pid2 == pid))
         if pid not in ctx.personnel:
             out.append({"tarih": tarih, "slot": slot, "tur": "hard", "mesaj": "Personel pasif veya silinmiş"})
             continue

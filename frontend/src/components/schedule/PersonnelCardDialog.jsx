@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
-import { Copy, FileText, MessageCircle, Flag } from "lucide-react";
+import { Copy, FileText, MessageCircle, Flag, ChevronLeft, ChevronRight, FolderArchive, Files } from "lucide-react";
 
 export function PersonnelCardDialog({ open, onClose, yil, ay, personnel }) {
   const [pid, setPid] = useState("");
@@ -23,6 +23,10 @@ export function PersonnelCardDialog({ open, onClose, yil, ay, personnel }) {
   };
   const whatsapp = () => window.open(`https://wa.me/?text=${encodeURIComponent(card.mesaj)}`, "_blank");
   const pdf = () => window.open(`${api.defaults.baseURL}/schedule/${yil}/${ay}/personnel/${pid}/export/pdf`, "_blank");
+  const allPdf = () => window.open(`${api.defaults.baseURL}/schedule/${yil}/${ay}/personnel-cards/export/pdf`, "_blank");
+  const allZip = () => window.open(`${api.defaults.baseURL}/schedule/${yil}/${ay}/personnel-cards/export/zip`, "_blank");
+  const idx = personnel.findIndex((p) => p.id === pid);
+  const step = (d) => { const n = personnel[idx + d]; if (n) setPid(n.id); };
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
@@ -31,12 +35,17 @@ export function PersonnelCardDialog({ open, onClose, yil, ay, personnel }) {
           <DialogTitle className="font-heading">Personel Nöbet Kartı</DialogTitle>
           <DialogDescription>{MONTHS_TR[ay - 1]} {yil} — kişiye özel nöbet listesi; WhatsApp mesajı veya PDF olarak paylaşın.</DialogDescription>
         </DialogHeader>
-        <Select value={pid} onValueChange={setPid}>
-          <SelectTrigger data-testid="card-personnel-select"><SelectValue placeholder="Personel seç" /></SelectTrigger>
-          <SelectContent>
-            {personnel.map((p) => <SelectItem key={p.id} value={p.id}>{p.ad_soyad}</SelectItem>)}
-          </SelectContent>
-        </Select>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="icon" onClick={() => step(-1)} disabled={idx <= 0} data-testid="card-prev-btn"><ChevronLeft className="w-4 h-4" /></Button>
+          <Select value={pid} onValueChange={setPid}>
+            <SelectTrigger data-testid="card-personnel-select"><SelectValue placeholder="Personel seç" /></SelectTrigger>
+            <SelectContent>
+              {personnel.map((p) => <SelectItem key={p.id} value={p.id}>{p.ad_soyad}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <Button variant="outline" size="icon" onClick={() => step(1)} disabled={idx < 0 || idx >= personnel.length - 1} data-testid="card-next-btn"><ChevronRight className="w-4 h-4" /></Button>
+        </div>
+        <div className="text-xs text-muted-foreground -mt-1" data-testid="card-position">{idx + 1} / {personnel.length} personel</div>
 
         {card && (
           <div className="space-y-3">
@@ -62,6 +71,13 @@ export function PersonnelCardDialog({ open, onClose, yil, ay, personnel }) {
             </div>
           </div>
         )}
+        <div className="border-t border-border pt-3">
+          <div className="text-xs font-semibold text-muted-foreground mb-2">Toplu Gönderim — tüm personel</div>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="secondary" size="sm" onClick={allPdf} data-testid="card-all-pdf-btn"><Files className="w-4 h-4 mr-2" /> Tek PDF (sayfa/personel)</Button>
+            <Button variant="secondary" size="sm" onClick={allZip} data-testid="card-all-zip-btn"><FolderArchive className="w-4 h-4 mr-2" /> ZIP (ayrı PDF'ler)</Button>
+          </div>
+        </div>
       </DialogContent>
     </Dialog>
   );
