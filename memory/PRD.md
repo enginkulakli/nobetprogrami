@@ -6,7 +6,7 @@ Türkçe, modern, mobil uyumlu 112 Acil Sağlık Hizmetleri personel nöbet plan
 ## Architecture
 - Backend: FastAPI + MongoDB (motor). Modüler `scheduler.py` merkezi constraint sistemi (hard/soft ayrımı).
 - Frontend: React + Tailwind + Shadcn UI + Sonner + Recharts. Dual switchable theme (Modern Light navy / Emergency Red).
-- No auth (single admin mode, per user choice).
+- Auth: JWT Bearer (isim + şifre). 2 rol: admin, istasyon_sorumlusu. İstasyon bazlı veri izolasyonu (API seviyesinde zorunlu).
 
 ## Personas
 - **Yönetici (Admin)**: Aylık nöbet listesini planlar, personel yönetir, izin ve tercihleri girer, manuel düzenler.
@@ -56,12 +56,24 @@ Türkçe, modern, mobil uyumlu 112 Acil Sağlık Hizmetleri personel nöbet plan
 - ✅ Testing: iteration_5 — backend 12/12, frontend pass
 - ✅ Sürücü nöbet hedefi (yalnızca "surucu" rolü): `nobet_hedef_1_15` / `nobet_hedef_16_son`; Ayarlar > Sürücü Nöbet Hedefleri kartı; scheduler soft skor (hedefe ulaşınca ceza, altındayken bonus); stats `nobet_1_15`, `nobet_16_son` + hedef; İstatistik tablosunda 1–15 / 16–Son sütunları (x/hedef renkli). PATCH personnel artık `exclude_unset` (null ile alan temizlenebilir). Self-test edildi (Hakan 3/9 hedefi tam tutturuldu).
 
+## Implemented (2026-06) — Auth & İstasyon İzolasyonu
+- ✅ Giriş sistemi: JWT Bearer, isim (kullanici_adi) + şifre; kayıt yok. `auth.py` (bcrypt hash, PyJWT). Admin startup'ta seed (`ADMIN_KULLANICI_ADI/SIFRE`, email enginkulakli9@gmail.com).
+- ✅ 2 rol: `admin` (tüm istasyonlar, kullanıcı & istasyon yönetimi, üst menüden istasyon seçer) ve `istasyon_sorumlusu` (kendi istasyonuna sabit, tüm operasyonel özellikler).
+- ✅ API seviyesi izolasyon: `get_current_user` / `require_admin` / `current_station` dependency'leri; her veri endpoint'i `istasyon_id` ile filtreli. Sorumlu için `X-Istasyon-Id` header'ı yok sayılır (kendi istasyonu zorlanır) → başka istasyona URL/API ile erişim engelli.
+- ✅ Modeller: `User`, `Station`; `Personnel.istasyon_id`, `LeaveRequest.istasyon_id`. schedules/carryover/templates da istasyon bazlı.
+- ✅ Admin paneli: `/kullanicilar` — İstasyon CRUD + İstasyon Sorumlusu CRUD + atanmamış (orphan) verileri bir istasyona taşıma (`/api/admin/orphans`, `/api/admin/assign-orphans`).
+- ✅ Şifre değiştirme: `POST /api/auth/change-password` (üst menü > Şifre Değiştir).
+- ✅ Frontend: `AuthProvider` (`lib/auth.jsx`), axios interceptor (Bearer + X-Istasyon-Id, 401→login), `Login.jsx`, `Users.jsx`, Layout üst bar (istasyon seçici / rozet + kullanıcı menüsü), korumalı yönlendirme (`App.js`).
+- ✅ Tatiller global (tüm istasyonlarda ortak, sadece login gerektirir).
+- ✅ Testing: iteration_7 — backend 14/14 (kritik izolasyon dahil), frontend tüm akışlar pass. Regresyon testi: `backend/tests/test_auth_isolation.py`.
+
 ## Bug Fixes
 - 2026-06: "Uncaught runtime errors / removeChild" her sayfada ilk tıklamada → Neden: index.html `lang="en"` iken UI Türkçe olduğu için Chrome otomatik çeviri yapıyor, Google Translate DOM metin düğümlerini değiştiriyor ve React reconciliation kırılıyor. Fix: `<html lang="tr" translate="no" class="notranslate">` + `<meta name="google" content="notranslate">`, başlık "112 Nöbet Listesi". iteration_6 pass.
 
 ## Backlog / Next Actions
-- P2: İstasyon/grup bazlı kurallar
-- P2: Kullanıcı hesabı (multi-user, sonraki faz)
+- P2: İstasyon/grup bazlı nöbet kuralları
+- ✅ Kullanıcı hesabı / çoklu kullanıcı + istasyon izolasyonu (tamamlandı, 2026-06)
 - P2: Manuel edit dialogunda personel yanında "uygun/ihlal" ön kontrolü
-- P2: İzinler takviminde tatil günlerinin işaretlenmesi ✅ (tamamlandı)
 - P2: Ay geçişi son 3 gün yerine yapılandırılabilir gün sayısı
+- P2: Refactor — server.py (1094 satır) router'lara bölünsün (auth/stations/users/personnel/schedules/exports)
+- P2: Dialog a11y — DialogDescription eklenerek Radix uyarıları giderilsin

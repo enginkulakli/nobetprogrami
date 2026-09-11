@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request
 from fastapi.responses import StreamingResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -18,11 +18,14 @@ from models import (
     LeaveRequest, LeaveBulkSet,
     MonthlySchedule, GenerateRequest, ManualUpdateRequest,
     HolidayCreate, Holiday, CarryoverSet, TemplateCreate, Template, TemplateApply,
+    Station, StationCreate, User, UserCreate, UserUpdate, LoginRequest,
+    ChangePasswordRequest, AssignOrphansRequest,
     new_id, now_iso,
 )
 from scheduler import generate_schedule, validate_manual_assignment, compute_violations, compute_normal_target, TASKS
 from seed import DEMO_PERSONNEL
 from holidays import official_holidays
+from auth import hash_password, verify_password, create_token, decode_token
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -39,22 +42,49 @@ logging.basicConfig(level=logging.INFO,
 logger = logging.getLogger(__name__)
 
 
+# ------------- auth dependencies -------------
+async def get_current_user(request: Request) -> dict:
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(401, "Giriş gerekli")
+    payload = decode_token(auth_header[7:])
+    user = await db.users.find_one({"id": payload["sub"]}, {"_id": 0, "password_hash": 0})
+    if not user:
+        raise HTTPException(401, "Kullanıcı bulunamadı")
+    return user
+
+
+async def require_admin(user: dict = Depends(get_current_user)) -> dict:
+    if user.get("role") != "admin":
+        raise HTTPException(403, "Bu işlem için yetkiniz yok")
+    return user
+
+
+async def current_station(request: Request, user: dict = Depends(get_current_user)) -> str:
+    """Resolve the station the request operates on and enforce isolation."""
+    if user.get("role") == "istasyon_sorumlusu":
+        if not user.get("istasyon_id"):
+            raise HTTPException(403, "Hesabınıza bir istasyon atanmamış")
+        return user["istasyon_id"]
+    # admin: station chosen via header
+    sid = request.headers.get("X-Istasyon-Id")
+    if not sid:
+        raise HTTPException(400, "Lütfen üst menüden bir istasyon seçin")
+    st = await db.stations.find_one({"id": sid})
+    if not st:
+        raise HTTPException(404, "İstasyon bulunamadı")
+    return sid
+
+
 # ------------- helpers -------------
-def strip_id(doc):
-    if doc and "_id" in doc:
-        doc.pop("_id", None)
-    return doc
+async def get_active_personnel_list(istasyon_id: str) -> List[dict]:
+    return await db.personnel.find({"istasyon_id": istasyon_id}, {"_id": 0}).to_list(1000)
 
 
-async def get_active_personnel_list() -> List[dict]:
-    docs = await db.personnel.find({}, {"_id": 0}).to_list(1000)
-    return docs
-
-
-async def build_leaves_map(ignore_ids: Optional[List[str]] = None) -> dict:
+async def build_leaves_map(istasyon_id: str, ignore_ids: Optional[List[str]] = None) -> dict:
     ignore = set(ignore_ids or [])
-    leaves = {}
-    async for d in db.leaves.find({}, {"_id": 0}):
+    leaves: dict = {}
+    async for d in db.leaves.find({"istasyon_id": istasyon_id}, {"_id": 0}):
         if d.get("id") in ignore:
             continue
         pid = d["personel_id"]
@@ -78,12 +108,12 @@ def prev_month(yil: int, ay: int):
     return (yil - 1, 12) if ay == 1 else (yil, ay - 1)
 
 
-async def get_carryover(yil: int, ay: int) -> dict:
+async def get_carryover(yil: int, ay: int, istasyon_id: str) -> dict:
     py, pm = prev_month(yil, ay)
-    prev = await db.schedules.find_one({"yil": py, "ay": pm}, {"_id": 0})
+    prev = await db.schedules.find_one({"yil": py, "ay": pm, "istasyon_id": istasyon_id}, {"_id": 0})
     if prev and prev.get("gunler"):
         return {"kaynak": "onceki_liste", "gunler": prev["gunler"][-3:], "onceki_yil": py, "onceki_ay": pm}
-    manual = await db.carryover.find_one({"yil": yil, "ay": ay}, {"_id": 0})
+    manual = await db.carryover.find_one({"yil": yil, "ay": ay, "istasyon_id": istasyon_id}, {"_id": 0})
     if manual and manual.get("gunler"):
         return {"kaynak": "manuel", "gunler": manual["gunler"], "onceki_yil": py, "onceki_ay": pm}
     return {"kaynak": "yok", "gunler": [], "onceki_yil": py, "onceki_ay": pm}
@@ -101,11 +131,11 @@ def _conflict_dates(errors: List[str]) -> set:
     return out
 
 
-async def find_conflicts(errors: List[str], ignored: List[str], pmap: dict) -> List[dict]:
+async def find_conflicts(errors: List[str], ignored: List[str], pmap: dict, istasyon_id: str) -> List[dict]:
     dates = _conflict_dates(errors)
     if not dates:
         return []
-    docs = await db.leaves.find({"tarih": {"$in": sorted(dates)}}, {"_id": 0}).to_list(1000)
+    docs = await db.leaves.find({"istasyon_id": istasyon_id, "tarih": {"$in": sorted(dates)}}, {"_id": 0}).to_list(1000)
     out = []
     for d in docs:
         if d["id"] in ignored or d["personel_id"] not in pmap:
@@ -126,50 +156,196 @@ async def health():
     return {"status": "ok"}
 
 
+# ------------- auth -------------
+@api_router.post("/auth/login")
+async def login(data: LoginRequest):
+    user = await db.users.find_one({"kullanici_adi": data.kullanici_adi})
+    if not user or not verify_password(data.sifre, user.get("password_hash", "")):
+        raise HTTPException(401, "Kullanıcı adı veya şifre hatalı")
+    token = create_token(user["id"])
+    user.pop("_id", None)
+    user.pop("password_hash", None)
+    if user.get("istasyon_id"):
+        st = await db.stations.find_one({"id": user["istasyon_id"]}, {"_id": 0})
+        user["istasyon_ad"] = st["ad"] if st else None
+    return {"token": token, "user": user}
+
+
+@api_router.get("/auth/me")
+async def auth_me(user: dict = Depends(get_current_user)):
+    if user.get("istasyon_id"):
+        st = await db.stations.find_one({"id": user["istasyon_id"]}, {"_id": 0})
+        user["istasyon_ad"] = st["ad"] if st else None
+    return user
+
+
+@api_router.post("/auth/change-password")
+async def change_password(data: ChangePasswordRequest, user: dict = Depends(get_current_user)):
+    full = await db.users.find_one({"id": user["id"]})
+    if not full or not verify_password(data.eski_sifre, full.get("password_hash", "")):
+        raise HTTPException(400, "Mevcut şifre hatalı")
+    if len(data.yeni_sifre) < 4:
+        raise HTTPException(400, "Yeni şifre en az 4 karakter olmalı")
+    await db.users.update_one({"id": user["id"]},
+                              {"$set": {"password_hash": hash_password(data.yeni_sifre), "sifre_degistirildi": True}})
+    return {"success": True}
+
+
+# ------------- stations (admin) -------------
+@api_router.get("/stations")
+async def list_stations(user: dict = Depends(require_admin)):
+    stations = await db.stations.find({}, {"_id": 0}).sort("ad", 1).to_list(1000)
+    for s in stations:
+        s["personel_sayisi"] = await db.personnel.count_documents({"istasyon_id": s["id"]})
+    return stations
+
+
+@api_router.post("/stations", response_model=Station)
+async def create_station(data: StationCreate, user: dict = Depends(require_admin)):
+    obj = Station(ad=data.ad)
+    await db.stations.insert_one(obj.model_dump())
+    return obj
+
+
+@api_router.patch("/stations/{sid}")
+async def update_station(sid: str, data: StationCreate, user: dict = Depends(require_admin)):
+    res = await db.stations.update_one({"id": sid}, {"$set": {"ad": data.ad}})
+    if res.matched_count == 0:
+        raise HTTPException(404, "İstasyon bulunamadı")
+    return await db.stations.find_one({"id": sid}, {"_id": 0})
+
+
+@api_router.delete("/stations/{sid}")
+async def delete_station(sid: str, user: dict = Depends(require_admin)):
+    if await db.personnel.count_documents({"istasyon_id": sid}) or await db.users.count_documents({"istasyon_id": sid}):
+        raise HTTPException(400, "İstasyona bağlı personel veya kullanıcı var; önce onları silin/taşıyın")
+    res = await db.stations.delete_one({"id": sid})
+    if res.deleted_count == 0:
+        raise HTTPException(404, "İstasyon bulunamadı")
+    return {"deleted": True}
+
+
+# ------------- users / station managers (admin) -------------
+@api_router.get("/users")
+async def list_users(user: dict = Depends(require_admin)):
+    users = await db.users.find({"role": "istasyon_sorumlusu"}, {"_id": 0, "password_hash": 0}).to_list(1000)
+    stations = {s["id"]: s["ad"] for s in await db.stations.find({}, {"_id": 0}).to_list(1000)}
+    for u in users:
+        u["istasyon_ad"] = stations.get(u.get("istasyon_id"))
+    return users
+
+
+@api_router.post("/users")
+async def create_user(data: UserCreate, user: dict = Depends(require_admin)):
+    if await db.users.find_one({"kullanici_adi": data.kullanici_adi}):
+        raise HTTPException(400, "Bu kullanıcı adı zaten kullanılıyor")
+    st = await db.stations.find_one({"id": data.istasyon_id})
+    if not st:
+        raise HTTPException(404, "İstasyon bulunamadı")
+    obj = User(kullanici_adi=data.kullanici_adi, role="istasyon_sorumlusu", istasyon_id=data.istasyon_id)
+    doc = obj.model_dump()
+    doc["password_hash"] = hash_password(data.sifre)
+    await db.users.insert_one(doc)
+    return {**obj.model_dump(), "istasyon_ad": st["ad"]}
+
+
+@api_router.patch("/users/{uid}")
+async def update_user(uid: str, data: UserUpdate, user: dict = Depends(require_admin)):
+    target = await db.users.find_one({"id": uid})
+    if not target or target.get("role") != "istasyon_sorumlusu":
+        raise HTTPException(404, "Kullanıcı bulunamadı")
+    upd: dict = {}
+    if data.kullanici_adi:
+        other = await db.users.find_one({"kullanici_adi": data.kullanici_adi, "id": {"$ne": uid}})
+        if other:
+            raise HTTPException(400, "Bu kullanıcı adı zaten kullanılıyor")
+        upd["kullanici_adi"] = data.kullanici_adi
+    if data.istasyon_id:
+        st = await db.stations.find_one({"id": data.istasyon_id})
+        if not st:
+            raise HTTPException(404, "İstasyon bulunamadı")
+        upd["istasyon_id"] = data.istasyon_id
+    if data.sifre:
+        upd["password_hash"] = hash_password(data.sifre)
+        upd["sifre_degistirildi"] = False
+    if not upd:
+        raise HTTPException(400, "Güncellenecek alan yok")
+    await db.users.update_one({"id": uid}, {"$set": upd})
+    return {"success": True}
+
+
+@api_router.delete("/users/{uid}")
+async def delete_user(uid: str, user: dict = Depends(require_admin)):
+    res = await db.users.delete_one({"id": uid, "role": "istasyon_sorumlusu"})
+    if res.deleted_count == 0:
+        raise HTTPException(404, "Kullanıcı bulunamadı")
+    return {"deleted": True}
+
+
+@api_router.get("/admin/orphans")
+async def orphan_count(user: dict = Depends(require_admin)):
+    q = {"$or": [{"istasyon_id": None}, {"istasyon_id": {"$exists": False}}]}
+    return {
+        "personnel": await db.personnel.count_documents(q),
+        "leaves": await db.leaves.count_documents(q),
+        "schedules": await db.schedules.count_documents(q),
+    }
+
+
+@api_router.post("/admin/assign-orphans")
+async def assign_orphans(data: AssignOrphansRequest, user: dict = Depends(require_admin)):
+    st = await db.stations.find_one({"id": data.istasyon_id})
+    if not st:
+        raise HTTPException(404, "İstasyon bulunamadı")
+    q = {"$or": [{"istasyon_id": None}, {"istasyon_id": {"$exists": False}}]}
+    result = {}
+    for coll in ("personnel", "leaves", "schedules", "carryover", "templates"):
+        r = await db[coll].update_many(q, {"$set": {"istasyon_id": data.istasyon_id}})
+        result[coll] = r.modified_count
+    return {"success": True, "atanan": result}
+
+
 # ------------- seed -------------
 @api_router.post("/seed/demo")
-async def seed_demo():
-    count = await db.personnel.count_documents({})
+async def seed_demo(istasyon_id: str = Depends(current_station)):
+    count = await db.personnel.count_documents({"istasyon_id": istasyon_id})
     if count > 0:
         return {"seeded": False, "existing": count}
     inserted = []
     for p in DEMO_PERSONNEL:
-        obj = Personnel(**p)
-        doc = obj.model_dump()
-        await db.personnel.insert_one(doc)
+        obj = Personnel(istasyon_id=istasyon_id, **p)
+        await db.personnel.insert_one(obj.model_dump())
         inserted.append(obj.id)
     return {"seeded": True, "count": len(inserted), "ids": inserted}
 
 
 # ------------- personnel -------------
 @api_router.get("/personnel", response_model=List[Personnel])
-async def list_personnel():
-    docs = await db.personnel.find({}, {"_id": 0}).to_list(1000)
-    return docs
+async def list_personnel(istasyon_id: str = Depends(current_station)):
+    return await db.personnel.find({"istasyon_id": istasyon_id}, {"_id": 0}).to_list(1000)
 
 
 @api_router.post("/personnel", response_model=Personnel)
-async def create_personnel(data: PersonnelCreate):
-    obj = Personnel(**data.model_dump())
+async def create_personnel(data: PersonnelCreate, istasyon_id: str = Depends(current_station)):
+    obj = Personnel(istasyon_id=istasyon_id, **data.model_dump())
     await db.personnel.insert_one(obj.model_dump())
     return obj
 
 
 @api_router.patch("/personnel/{pid}", response_model=Personnel)
-async def update_personnel(pid: str, data: PersonnelUpdate):
+async def update_personnel(pid: str, data: PersonnelUpdate, istasyon_id: str = Depends(current_station)):
     update = data.model_dump(exclude_unset=True)
     if not update:
         raise HTTPException(400, "Güncellenecek alan yok")
-    res = await db.personnel.update_one({"id": pid}, {"$set": update})
+    res = await db.personnel.update_one({"id": pid, "istasyon_id": istasyon_id}, {"$set": update})
     if res.matched_count == 0:
         raise HTTPException(404, "Personel bulunamadı")
-    doc = await db.personnel.find_one({"id": pid}, {"_id": 0})
-    return doc
+    return await db.personnel.find_one({"id": pid}, {"_id": 0})
 
 
 @api_router.delete("/personnel/{pid}")
-async def delete_personnel(pid: str):
-    res = await db.personnel.delete_one({"id": pid})
+async def delete_personnel(pid: str, istasyon_id: str = Depends(current_station)):
+    res = await db.personnel.delete_one({"id": pid, "istasyon_id": istasyon_id})
     if res.deleted_count == 0:
         raise HTTPException(404, "Personel bulunamadı")
     await db.leaves.delete_many({"personel_id": pid})
@@ -178,26 +354,28 @@ async def delete_personnel(pid: str):
 
 # ------------- leaves / requests -------------
 @api_router.get("/leaves")
-async def list_leaves(personel_id: Optional[str] = None, yil: Optional[int] = None, ay: Optional[int] = None):
-    q = {}
+async def list_leaves(istasyon_id: str = Depends(current_station),
+                      personel_id: Optional[str] = None, yil: Optional[int] = None, ay: Optional[int] = None):
+    q = {"istasyon_id": istasyon_id}
     if personel_id:
         q["personel_id"] = personel_id
     if yil and ay:
         prefix = f"{yil:04d}-{ay:02d}"
         q["tarih"] = {"$regex": f"^{prefix}"}
-    docs = await db.leaves.find(q, {"_id": 0}).to_list(10000)
-    return docs
+    return await db.leaves.find(q, {"_id": 0}).to_list(10000)
 
 
 @api_router.post("/leaves/bulk")
-async def leaves_bulk(data: LeaveBulkSet):
-    # remove existing entries for these dates & personnel
+async def leaves_bulk(data: LeaveBulkSet, istasyon_id: str = Depends(current_station)):
+    p = await db.personnel.find_one({"id": data.personel_id, "istasyon_id": istasyon_id})
+    if not p:
+        raise HTTPException(404, "Personel bulunamadı")
     await db.leaves.delete_many({"personel_id": data.personel_id, "tarih": {"$in": data.tarihler}})
     if data.durum is None:
         return {"cleared": len(data.tarihler)}
     new_docs = []
     for t in data.tarihler:
-        lr = LeaveRequest(personel_id=data.personel_id, tarih=t, durum=data.durum)
+        lr = LeaveRequest(istasyon_id=istasyon_id, personel_id=data.personel_id, tarih=t, durum=data.durum)
         new_docs.append(lr.model_dump())
     if new_docs:
         await db.leaves.insert_many(new_docs)
@@ -206,32 +384,32 @@ async def leaves_bulk(data: LeaveBulkSet):
 
 # ------------- schedules -------------
 @api_router.get("/schedule/{yil}/{ay}")
-async def get_schedule(yil: int, ay: int):
-    doc = await db.schedules.find_one({"yil": yil, "ay": ay}, {"_id": 0})
+async def get_schedule(yil: int, ay: int, istasyon_id: str = Depends(current_station)):
+    doc = await db.schedules.find_one({"yil": yil, "ay": ay, "istasyon_id": istasyon_id}, {"_id": 0})
     if not doc:
         return {"exists": False, "yil": yil, "ay": ay}
     return {"exists": True, **doc}
 
 
 @api_router.post("/schedule/generate")
-async def do_generate(req: GenerateRequest):
-    personnel = await get_active_personnel_list()
+async def do_generate(req: GenerateRequest, istasyon_id: str = Depends(current_station)):
+    personnel = await get_active_personnel_list(istasyon_id)
     active = [p for p in personnel if p.get("aktif", True)]
     if len(active) < 3:
         raise HTTPException(400, "En az 3 aktif personel gerekli")
     pmap = {p["id"]: p for p in personnel}
     holidays = {h["tarih"] for h in await get_holidays(req.yil)}
-    carry = await get_carryover(req.yil, req.ay)
+    carry = await get_carryover(req.yil, req.ay, istasyon_id)
     ignored = list(req.ignore_leave_ids)
 
     attempts = 0
     while True:
-        leaves = await build_leaves_map(ignored)
+        leaves = await build_leaves_map(istasyon_id, ignored)
         tinfo = await build_targets(req.yil, req.ay, active, leaves)
         targets = {k: t["normal_hedef"] for k, t in tinfo.items()}
         schedule, errors = generate_schedule(req.yil, req.ay, active, leaves, req.max_gun_asiri,
                                              holidays, carry["gunler"], targets)
-        conflicts = await find_conflicts(errors, ignored, pmap)
+        conflicts = await find_conflicts(errors, ignored, pmap, istasyon_id)
         if not errors or not req.rastgele_yoksay or attempts >= 10:
             break
         pool = [c for c in conflicts if c["durum"] == "nobet_istemiyor"] or conflicts
@@ -241,11 +419,12 @@ async def do_generate(req: GenerateRequest):
         attempts += 1
 
     doc = schedule.model_dump()
+    doc["istasyon_id"] = istasyon_id
     doc["updated_at"] = now_iso()
     doc["yoksayilan_istekler"] = ignored
     doc["gecis_kaynagi"] = carry["kaynak"]
     await db.schedules.update_one(
-        {"yil": req.yil, "ay": req.ay},
+        {"yil": req.yil, "ay": req.ay, "istasyon_id": istasyon_id},
         {"$set": doc},
         upsert=True,
     )
@@ -257,28 +436,28 @@ async def do_generate(req: GenerateRequest):
 
 
 @api_router.post("/schedule/manual")
-async def manual_update(req: ManualUpdateRequest):
-    doc = await db.schedules.find_one({"yil": req.yil, "ay": req.ay}, {"_id": 0})
+async def manual_update(req: ManualUpdateRequest, istasyon_id: str = Depends(current_station)):
+    doc = await db.schedules.find_one({"yil": req.yil, "ay": req.ay, "istasyon_id": istasyon_id}, {"_id": 0})
     if not doc:
         raise HTTPException(404, "Nöbet listesi bulunamadı")
 
-    personnel = await get_active_personnel_list()
-    leaves = await build_leaves_map(doc.get("yoksayilan_istekler"))
-    carry = await get_carryover(req.yil, req.ay)
+    personnel = await get_active_personnel_list(istasyon_id)
+    leaves = await build_leaves_map(istasyon_id, doc.get("yoksayilan_istekler"))
+    carry = await get_carryover(req.yil, req.ay, istasyon_id)
 
     if req.personel_id:
+        if not any(p["id"] == req.personel_id for p in personnel):
+            raise HTTPException(404, "Personel bulunamadı")
         tinfo = await build_targets(req.yil, req.ay, personnel, leaves)
         targets = {k: t["normal_hedef"] for k, t in tinfo.items()}
         ok, msg = validate_manual_assignment(doc, req.tarih, req.slot, req.personel_id, personnel, leaves, carry["gunler"], targets)
         if not ok:
             return {"success": False, "message": f"Kural ihlali: {msg}"}
 
-    # apply change
     updated = False
     for day in doc["gunler"]:
         if day["tarih"] == req.tarih:
             day[req.slot] = req.personel_id
-            # remove existing assignment for this slot's task on this date & clean up
             slot_to_task = {
                 "saglikci_1": "saglikci_24",
                 "saglikci_2": "saglikci_24",
@@ -287,7 +466,6 @@ async def manual_update(req: ManualUpdateRequest):
                 "surucu_24": "surucu_24",
             }
             task = slot_to_task[req.slot]
-            # For saglikci slots, remove assignment matching same task + matched removed pid
             new_assignments = []
             removed_once = False
             for a in doc.get("assignments", []):
@@ -295,7 +473,6 @@ async def manual_update(req: ManualUpdateRequest):
                         and (req.slot in ("saglikci_1", "saglikci_2")
                              or a["gorev"] == task)):
                     if req.slot in ("saglikci_1", "saglikci_2"):
-                        # only remove one saglikci
                         removed_once = True
                         continue
                     removed_once = True
@@ -320,19 +497,19 @@ async def manual_update(req: ManualUpdateRequest):
         raise HTTPException(404, "Gün bulunamadı")
 
     doc["updated_at"] = now_iso()
-    await db.schedules.update_one({"yil": req.yil, "ay": req.ay}, {"$set": doc})
+    await db.schedules.update_one({"yil": req.yil, "ay": req.ay, "istasyon_id": istasyon_id}, {"$set": doc})
     return {"success": True, "schedule": doc}
 
 
 # ------------- violations (canlı kural rozetleri) -------------
 @api_router.get("/schedule/{yil}/{ay}/violations")
-async def get_violations(yil: int, ay: int):
-    doc = await db.schedules.find_one({"yil": yil, "ay": ay}, {"_id": 0})
+async def get_violations(yil: int, ay: int, istasyon_id: str = Depends(current_station)):
+    doc = await db.schedules.find_one({"yil": yil, "ay": ay, "istasyon_id": istasyon_id}, {"_id": 0})
     if not doc:
         return {"violations": []}
-    personnel = await get_active_personnel_list()
-    leaves = await build_leaves_map(doc.get("yoksayilan_istekler"))
-    carry = await get_carryover(yil, ay)
+    personnel = await get_active_personnel_list(istasyon_id)
+    leaves = await build_leaves_map(istasyon_id, doc.get("yoksayilan_istekler"))
+    carry = await get_carryover(yil, ay, istasyon_id)
     tinfo = await build_targets(yil, ay, personnel, leaves)
     targets = {k: t["normal_hedef"] for k, t in tinfo.items()}
     return {"violations": compute_violations(doc, personnel, leaves, carry["gunler"], targets)}
@@ -344,11 +521,11 @@ MONTHS_TR = ["Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran",
              "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık"]
 
 
-async def _personnel_card_data(yil: int, ay: int, pid: str):
-    doc = await db.schedules.find_one({"yil": yil, "ay": ay}, {"_id": 0})
+async def _personnel_card_data(yil: int, ay: int, pid: str, istasyon_id: str):
+    doc = await db.schedules.find_one({"yil": yil, "ay": ay, "istasyon_id": istasyon_id}, {"_id": 0})
     if not doc:
         raise HTTPException(404, "Liste yok")
-    p = await db.personnel.find_one({"id": pid}, {"_id": 0})
+    p = await db.personnel.find_one({"id": pid, "istasyon_id": istasyon_id}, {"_id": 0})
     if not p:
         raise HTTPException(404, "Personel bulunamadı")
     holidays = {h["tarih"]: h["ad"] for h in await get_holidays(yil)}
@@ -377,8 +554,8 @@ def _card_text(p: dict, yil: int, ay: int, items: List[dict], toplam: int) -> st
 
 
 @api_router.get("/schedule/{yil}/{ay}/personnel/{pid}/card")
-async def personnel_card(yil: int, ay: int, pid: str):
-    p, items, toplam = await _personnel_card_data(yil, ay, pid)
+async def personnel_card(yil: int, ay: int, pid: str, istasyon_id: str = Depends(current_station)):
+    p, items, toplam = await _personnel_card_data(yil, ay, pid, istasyon_id)
     return {"personel": p, "nobetler": items, "toplam_saat": toplam, "toplam_nobet": len(items),
             "mesaj": _card_text(p, yil, ay, items, toplam)}
 
@@ -445,32 +622,32 @@ def _safe_name(s: str) -> str:
 
 
 @api_router.get("/schedule/{yil}/{ay}/personnel/{pid}/export/pdf")
-async def personnel_card_pdf(yil: int, ay: int, pid: str):
-    p, items, toplam = await _personnel_card_data(yil, ay, pid)
+async def personnel_card_pdf(yil: int, ay: int, pid: str, istasyon_id: str = Depends(current_station)):
+    p, items, toplam = await _personnel_card_data(yil, ay, pid, istasyon_id)
     buf = _build_pdf(_card_elements(p, yil, ay, items, toplam))
     fname = _safe_name(f"nobet_karti_{p['ad_soyad'].replace(' ', '_')}_{yil}_{ay:02d}.pdf")
     return StreamingResponse(buf, media_type="application/pdf",
                              headers={"Content-Disposition": f"attachment; filename*=UTF-8''{fname}"})
 
 
-async def _all_cards(yil: int, ay: int):
-    doc = await db.schedules.find_one({"yil": yil, "ay": ay}, {"_id": 0})
+async def _all_cards(yil: int, ay: int, istasyon_id: str):
+    doc = await db.schedules.find_one({"yil": yil, "ay": ay, "istasyon_id": istasyon_id}, {"_id": 0})
     if not doc:
         raise HTTPException(404, "Liste yok")
     assigned = {a["personel_id"] for a in doc.get("assignments", [])}
-    personnel = sorted([p for p in await get_active_personnel_list() if p["id"] in assigned],
+    personnel = sorted([p for p in await get_active_personnel_list(istasyon_id) if p["id"] in assigned],
                        key=lambda p: p["ad_soyad"])
     out = []
     for p in personnel:
-        _, items, toplam = await _personnel_card_data(yil, ay, p["id"])
+        _, items, toplam = await _personnel_card_data(yil, ay, p["id"], istasyon_id)
         out.append((p, items, toplam))
     return out
 
 
 @api_router.get("/schedule/{yil}/{ay}/personnel-cards/export/pdf")
-async def all_cards_pdf(yil: int, ay: int):
+async def all_cards_pdf(yil: int, ay: int, istasyon_id: str = Depends(current_station)):
     from reportlab.platypus import PageBreak
-    cards = await _all_cards(yil, ay)
+    cards = await _all_cards(yil, ay, istasyon_id)
     elements = []
     for idx, (p, items, toplam) in enumerate(cards):
         if idx:
@@ -481,9 +658,9 @@ async def all_cards_pdf(yil: int, ay: int):
 
 
 @api_router.get("/schedule/{yil}/{ay}/personnel-cards/export/zip")
-async def all_cards_zip(yil: int, ay: int):
+async def all_cards_zip(yil: int, ay: int, istasyon_id: str = Depends(current_station)):
     import zipfile
-    cards = await _all_cards(yil, ay)
+    cards = await _all_cards(yil, ay, istasyon_id)
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for p, items, toplam in cards:
@@ -503,13 +680,13 @@ class CandidatesRequest(BaseModel):
 
 
 @api_router.post("/schedule/candidates")
-async def slot_candidates(req: CandidatesRequest):
-    doc = await db.schedules.find_one({"yil": req.yil, "ay": req.ay}, {"_id": 0})
+async def slot_candidates(req: CandidatesRequest, istasyon_id: str = Depends(current_station)):
+    doc = await db.schedules.find_one({"yil": req.yil, "ay": req.ay, "istasyon_id": istasyon_id}, {"_id": 0})
     if not doc:
         raise HTTPException(404, "Nöbet listesi bulunamadı")
-    personnel = await get_active_personnel_list()
-    leaves = await build_leaves_map(doc.get("yoksayilan_istekler"))
-    carry = await get_carryover(req.yil, req.ay)
+    personnel = await get_active_personnel_list(istasyon_id)
+    leaves = await build_leaves_map(istasyon_id, doc.get("yoksayilan_istekler"))
+    carry = await get_carryover(req.yil, req.ay, istasyon_id)
     hours = {}
     for a in doc.get("assignments", []):
         hours[a["personel_id"]] = hours.get(a["personel_id"], 0) + a["saat"]
@@ -544,13 +721,13 @@ async def slot_candidates(req: CandidatesRequest):
 
 # ------------- ana sayfa özeti -------------
 @api_router.get("/schedule/{yil}/{ay}/summary")
-async def schedule_summary(yil: int, ay: int):
-    doc = await db.schedules.find_one({"yil": yil, "ay": ay}, {"_id": 0})
+async def schedule_summary(yil: int, ay: int, istasyon_id: str = Depends(current_station)):
+    doc = await db.schedules.find_one({"yil": yil, "ay": ay, "istasyon_id": istasyon_id}, {"_id": 0})
     if not doc:
         return {"exists": False}
-    personnel = await get_active_personnel_list()
-    leaves = await build_leaves_map(doc.get("yoksayilan_istekler"))
-    carry = await get_carryover(yil, ay)
+    personnel = await get_active_personnel_list(istasyon_id)
+    leaves = await build_leaves_map(istasyon_id, doc.get("yoksayilan_istekler"))
+    carry = await get_carryover(yil, ay, istasyon_id)
     tinfo = await build_targets(yil, ay, personnel, leaves)
     viol = compute_violations(doc, personnel, leaves, carry["gunler"], {k: t["normal_hedef"] for k, t in tinfo.items()})
     empty = []
@@ -576,14 +753,14 @@ async def schedule_summary(yil: int, ay: int):
 
 # ------------- statistics -------------
 @api_router.get("/schedule/{yil}/{ay}/stats")
-async def get_stats(yil: int, ay: int):
-    doc = await db.schedules.find_one({"yil": yil, "ay": ay}, {"_id": 0})
+async def get_stats(yil: int, ay: int, istasyon_id: str = Depends(current_station)):
+    doc = await db.schedules.find_one({"yil": yil, "ay": ay, "istasyon_id": istasyon_id}, {"_id": 0})
     if not doc:
         raise HTTPException(404, "Liste yok")
-    personnel = await get_active_personnel_list()
+    personnel = await get_active_personnel_list(istasyon_id)
     pmap = {p["id"]: p for p in personnel}
     holidays = {h["tarih"] for h in await get_holidays(yil)}
-    leaves = await build_leaves_map()
+    leaves = await build_leaves_map(istasyon_id)
     tinfo = await build_targets(yil, ay, personnel, leaves)
 
     stats = {}
@@ -653,31 +830,31 @@ async def get_stats(yil: int, ay: int):
 
 
 @api_router.get("/schedule/{yil}/{ay}/targets")
-async def get_targets(yil: int, ay: int):
-    personnel = await get_active_personnel_list()
-    leaves = await build_leaves_map()
+async def get_targets(yil: int, ay: int, istasyon_id: str = Depends(current_station)):
+    personnel = await get_active_personnel_list(istasyon_id)
+    leaves = await build_leaves_map(istasyon_id)
     tinfo = await build_targets(yil, ay, personnel, leaves)
     return {"yil": yil, "ay": ay, "targets": [
         {"personel_id": p["id"], "ad_soyad": p["ad_soyad"], **tinfo[p["id"]]} for p in personnel]}
 
 
 @api_router.post("/personnel/fazla-mesai")
-async def set_overtime(data: dict):
+async def set_overtime(data: dict, istasyon_id: str = Depends(current_station)):
     ids = set(data.get("personel_ids", []))
-    await db.personnel.update_many({}, {"$set": {"fazla_mesai": False}})
+    await db.personnel.update_many({"istasyon_id": istasyon_id}, {"$set": {"fazla_mesai": False}})
     if ids:
-        await db.personnel.update_many({"id": {"$in": list(ids)}}, {"$set": {"fazla_mesai": True}})
+        await db.personnel.update_many({"istasyon_id": istasyon_id, "id": {"$in": list(ids)}}, {"$set": {"fazla_mesai": True}})
     return {"secili": len(ids)}
 
 
-# ------------- holidays -------------
+# ------------- holidays (global / tüm istasyonlar için ortak) -------------
 @api_router.get("/holidays/{yil}")
-async def list_holidays(yil: int):
+async def list_holidays(yil: int, user: dict = Depends(get_current_user)):
     return await get_holidays(yil)
 
 
 @api_router.post("/holidays")
-async def add_holiday(data: HolidayCreate):
+async def add_holiday(data: HolidayCreate, user: dict = Depends(get_current_user)):
     date.fromisoformat(data.tarih)
     await db.holidays.delete_many({"tarih": data.tarih})
     obj = Holiday(tarih=data.tarih, ad=data.ad)
@@ -686,7 +863,7 @@ async def add_holiday(data: HolidayCreate):
 
 
 @api_router.delete("/holidays/{hid}")
-async def delete_holiday(hid: str):
+async def delete_holiday(hid: str, user: dict = Depends(get_current_user)):
     res = await db.holidays.delete_one({"id": hid})
     if res.deleted_count == 0:
         raise HTTPException(404, "Tatil bulunamadı")
@@ -695,61 +872,65 @@ async def delete_holiday(hid: str):
 
 # ------------- carryover (ay geçişi) -------------
 @api_router.get("/carryover/{yil}/{ay}")
-async def carryover_get(yil: int, ay: int):
-    return await get_carryover(yil, ay)
+async def carryover_get(yil: int, ay: int, istasyon_id: str = Depends(current_station)):
+    return await get_carryover(yil, ay, istasyon_id)
 
 
 @api_router.put("/carryover/{yil}/{ay}")
-async def carryover_set(yil: int, ay: int, data: CarryoverSet):
+async def carryover_set(yil: int, ay: int, data: CarryoverSet, istasyon_id: str = Depends(current_station)):
     gunler = [g.model_dump() for g in data.gunler
               if g.saglikci_1 or g.saglikci_2 or g.surucu_gunduz or g.surucu_gece or g.surucu_24]
-    await db.carryover.update_one({"yil": yil, "ay": ay},
-                                  {"$set": {"yil": yil, "ay": ay, "gunler": gunler, "updated_at": now_iso()}},
+    await db.carryover.update_one({"yil": yil, "ay": ay, "istasyon_id": istasyon_id},
+                                  {"$set": {"yil": yil, "ay": ay, "istasyon_id": istasyon_id,
+                                            "gunler": gunler, "updated_at": now_iso()}},
                                   upsert=True)
-    return await get_carryover(yil, ay)
+    return await get_carryover(yil, ay, istasyon_id)
 
 
 # ------------- templates -------------
 @api_router.get("/templates", response_model=List[Template])
-async def list_templates():
-    return await db.templates.find({}, {"_id": 0}).sort("created_at", -1).to_list(100)
+async def list_templates(istasyon_id: str = Depends(current_station)):
+    return await db.templates.find({"istasyon_id": istasyon_id}, {"_id": 0}).sort("created_at", -1).to_list(100)
 
 
 @api_router.post("/templates", response_model=Template)
-async def create_template(data: TemplateCreate):
-    personnel = await get_active_personnel_list()
+async def create_template(data: TemplateCreate, istasyon_id: str = Depends(current_station)):
+    personnel = await get_active_personnel_list(istasyon_id)
     personel = [{"personel_id": p["id"], "ad_soyad": p["ad_soyad"], "aktif": p.get("aktif", True),
                  "hedef_saat": p.get("hedef_saat", 180)} for p in personnel]
     tercihler = []
     if data.kaynak_yil and data.kaynak_ay:
         prefix = f"{data.kaynak_yil:04d}-{data.kaynak_ay:02d}"
-        docs = await db.leaves.find({"durum": "nobet_istemiyor", "tarih": {"$regex": f"^{prefix}"}}, {"_id": 0}).to_list(10000)
+        docs = await db.leaves.find({"istasyon_id": istasyon_id, "durum": "nobet_istemiyor",
+                                     "tarih": {"$regex": f"^{prefix}"}}, {"_id": 0}).to_list(10000)
         counter = {}
         for d in docs:
             key = (d["personel_id"], date.fromisoformat(d["tarih"]).weekday())
             counter[key] = counter.get(key, 0) + 1
         tercihler = [{"personel_id": k[0], "haftanin_gunu": k[1]} for k, v in counter.items() if v >= 2]
     obj = Template(ad=data.ad, aciklama=data.aciklama, personel=personel, tercihler=tercihler)
-    await db.templates.insert_one(obj.model_dump())
+    doc = obj.model_dump()
+    doc["istasyon_id"] = istasyon_id
+    await db.templates.insert_one(doc)
     return obj
 
 
 @api_router.delete("/templates/{tid}")
-async def delete_template(tid: str):
-    res = await db.templates.delete_one({"id": tid})
+async def delete_template(tid: str, istasyon_id: str = Depends(current_station)):
+    res = await db.templates.delete_one({"id": tid, "istasyon_id": istasyon_id})
     if res.deleted_count == 0:
         raise HTTPException(404, "Şablon bulunamadı")
     return {"deleted": True}
 
 
 @api_router.post("/templates/{tid}/apply")
-async def apply_template(tid: str, data: TemplateApply):
-    tpl = await db.templates.find_one({"id": tid}, {"_id": 0})
+async def apply_template(tid: str, data: TemplateApply, istasyon_id: str = Depends(current_station)):
+    tpl = await db.templates.find_one({"id": tid, "istasyon_id": istasyon_id}, {"_id": 0})
     if not tpl:
         raise HTTPException(404, "Şablon bulunamadı")
     updated = 0
     for tp in tpl.get("personel", []):
-        res = await db.personnel.update_one({"id": tp["personel_id"]},
+        res = await db.personnel.update_one({"id": tp["personel_id"], "istasyon_id": istasyon_id},
                                             {"$set": {"aktif": tp["aktif"], "hedef_saat": tp["hedef_saat"]}})
         updated += res.matched_count
     _, dim = monthrange(data.yil, data.ay)
@@ -762,8 +943,8 @@ async def apply_template(tid: str, data: TemplateApply):
             exists = await db.leaves.find_one({"personel_id": pref["personel_id"], "tarih": d.isoformat()})
             if exists:
                 continue
-            await db.leaves.insert_one(LeaveRequest(personel_id=pref["personel_id"], tarih=d.isoformat(),
-                                                    durum="nobet_istemiyor").model_dump())
+            await db.leaves.insert_one(LeaveRequest(istasyon_id=istasyon_id, personel_id=pref["personel_id"],
+                                                    tarih=d.isoformat(), durum="nobet_istemiyor").model_dump())
             added += 1
     return {"success": True, "personel_guncellendi": updated, "tercih_eklendi": added}
 
@@ -779,14 +960,14 @@ def _fmt_task_label(task: str) -> str:
 
 
 @api_router.get("/schedule/{yil}/{ay}/export/excel")
-async def export_excel(yil: int, ay: int):
+async def export_excel(yil: int, ay: int, istasyon_id: str = Depends(current_station)):
     from openpyxl import Workbook
     from openpyxl.styles import Font, Alignment, PatternFill
 
-    doc = await db.schedules.find_one({"yil": yil, "ay": ay}, {"_id": 0})
+    doc = await db.schedules.find_one({"yil": yil, "ay": ay, "istasyon_id": istasyon_id}, {"_id": 0})
     if not doc:
         raise HTTPException(404, "Liste yok")
-    personnel = await get_active_personnel_list()
+    personnel = await get_active_personnel_list(istasyon_id)
     pmap = {p["id"]: p["ad_soyad"] for p in personnel}
 
     wb = Workbook()
@@ -828,16 +1009,16 @@ async def export_excel(yil: int, ay: int):
 
 
 @api_router.get("/schedule/{yil}/{ay}/export/pdf")
-async def export_pdf(yil: int, ay: int):
+async def export_pdf(yil: int, ay: int, istasyon_id: str = Depends(current_station)):
     from reportlab.lib.pagesizes import A4, landscape
     from reportlab.lib import colors
     from reportlab.lib.styles import getSampleStyleSheet
     from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 
-    doc_db = await db.schedules.find_one({"yil": yil, "ay": ay}, {"_id": 0})
+    doc_db = await db.schedules.find_one({"yil": yil, "ay": ay, "istasyon_id": istasyon_id}, {"_id": 0})
     if not doc_db:
         raise HTTPException(404, "Liste yok")
-    personnel = await get_active_personnel_list()
+    personnel = await get_active_personnel_list(istasyon_id)
     pmap = {p["id"]: p["ad_soyad"] for p in personnel}
 
     font = _register_pdf_font()
@@ -891,6 +1072,21 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+async def _startup():
+    await db.users.create_index("kullanici_adi", unique=True)
+    admin_user = os.environ.get("ADMIN_KULLANICI_ADI", "admin")
+    admin_pass = os.environ.get("ADMIN_SIFRE", "admin123")
+    admin_email = os.environ.get("ADMIN_EMAIL")
+    existing = await db.users.find_one({"kullanici_adi": admin_user})
+    if not existing:
+        u = User(kullanici_adi=admin_user, role="admin", email=admin_email, sifre_degistirildi=False)
+        doc = u.model_dump()
+        doc["password_hash"] = hash_password(admin_pass)
+        await db.users.insert_one(doc)
+        logger.info("Admin kullanıcısı oluşturuldu: %s", admin_user)
 
 
 @app.on_event("shutdown")

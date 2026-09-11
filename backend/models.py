@@ -10,6 +10,7 @@ PersonnelType = Literal["saglikci", "surucu", "saglikci_surucu"]
 LeaveStatus = Literal["yillik_izin", "nobet_istemiyor"]
 TaskKind = Literal["saglikci_24", "surucu_gunduz", "surucu_gece", "surucu_24"]
 SurucuTercihi = Literal["12", "24", "yok"]
+UserRole = Literal["admin", "istasyon_sorumlusu"]
 
 
 def now_iso() -> str:
@@ -20,10 +21,60 @@ def new_id() -> str:
     return str(uuid.uuid4())
 
 
+# ---------------- Stations & Users (auth) ----------------
+class Station(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=new_id)
+    ad: str
+    created_at: str = Field(default_factory=now_iso)
+
+
+class StationCreate(BaseModel):
+    ad: str
+
+
+class User(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=new_id)
+    kullanici_adi: str
+    role: UserRole = "istasyon_sorumlusu"
+    istasyon_id: Optional[str] = None
+    email: Optional[str] = None
+    sifre_degistirildi: bool = False
+    created_at: str = Field(default_factory=now_iso)
+
+
+class UserCreate(BaseModel):
+    kullanici_adi: str
+    sifre: str
+    istasyon_id: str
+
+
+class UserUpdate(BaseModel):
+    kullanici_adi: Optional[str] = None
+    sifre: Optional[str] = None
+    istasyon_id: Optional[str] = None
+
+
+class LoginRequest(BaseModel):
+    kullanici_adi: str
+    sifre: str
+
+
+class ChangePasswordRequest(BaseModel):
+    eski_sifre: str
+    yeni_sifre: str
+
+
+class AssignOrphansRequest(BaseModel):
+    istasyon_id: str
+
+
 # ---------------- Personnel ----------------
 class Personnel(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=new_id)
+    istasyon_id: Optional[str] = None
     ad_soyad: str
     personel_turu: PersonnelType
     aktif: bool = True
@@ -64,6 +115,7 @@ class PersonnelUpdate(BaseModel):
 class LeaveRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=new_id)
+    istasyon_id: Optional[str] = None
     personel_id: str
     tarih: str  # YYYY-MM-DD
     durum: LeaveStatus

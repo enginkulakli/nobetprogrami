@@ -3,7 +3,40 @@ import axios from "axios";
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 export const API = `${BACKEND_URL}/api`;
 
+export const TOKEN_KEY = "nobet-token";
+export const STATION_KEY = "nobet-istasyon";
+
 export const api = axios.create({ baseURL: API });
+
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem(TOKEN_KEY);
+  if (token) config.headers.Authorization = `Bearer ${token}`;
+  const st = localStorage.getItem(STATION_KEY);
+  if (st) config.headers["X-Istasyon-Id"] = st;
+  return config;
+});
+
+api.interceptors.response.use(
+  (r) => r,
+  (err) => {
+    const url = err.config?.url || "";
+    if (err.response?.status === 401 && !url.includes("/auth/login")) {
+      localStorage.removeItem(TOKEN_KEY);
+      if (window.location.pathname !== "/login") window.location.href = "/login";
+    }
+    return Promise.reject(err);
+  }
+);
+
+export function formatApiError(e) {
+  const detail = e.response?.data?.detail;
+  if (detail == null) return e.message || "Bir hata oluştu";
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail))
+    return detail.map((x) => (x && typeof x.msg === "string" ? x.msg : JSON.stringify(x))).join(" ");
+  if (detail && typeof detail.msg === "string") return detail.msg;
+  return String(detail);
+}
 
 export const PERSONNEL_LABELS = {
   saglikci: "Sağlıkçı",
