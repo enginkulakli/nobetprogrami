@@ -13,7 +13,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
 
 const emptyForm = { ad_soyad: "", personel_turu: "saglikci", aktif: true, hedef_saat: 180, aciklama: "", fazla_mesai: false, surucu_tercihi: "yok" };
-const TERCIH_LABELS = { "12": "12s sürücü", "24": "24s sürücü", yok: "Tercih yok" };
+const TERCIH_LABELS = { "12": "12s sürücü", "24": "24s sürücü", "24_saat_surucu": "24 Saat Sürücü", yok: "Tercih yok" };
 
 export default function Personnel() {
   const [list, setList] = useState([]);
@@ -179,6 +179,7 @@ export default function Personnel() {
                   <SelectContent>
                     <SelectItem value="12">12 saat sürücü istiyorum</SelectItem>
                     <SelectItem value="24">24 saat sürücü istiyorum</SelectItem>
+                    <SelectItem value="24_saat_surucu">24 Saat Sürücü</SelectItem>
                     <SelectItem value="yok">Tercihim yok</SelectItem>
                   </SelectContent>
                 </Select>

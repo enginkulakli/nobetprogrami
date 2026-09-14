@@ -1,15 +1,53 @@
+import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { useTheme } from "@/lib/theme";
 import { api } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 import { toast } from "sonner";
-import { Palette, Database } from "lucide-react";
+import { Palette, Database, SlidersHorizontal } from "lucide-react";
 import { TemplatesCard } from "@/components/TemplatesCard";
 import { HolidaysCard } from "@/components/HolidaysCard";
 import { DriverTargetsCard } from "@/components/DriverTargetsCard";
 
 export default function Settings() {
   const { theme, setTheme } = useTheme();
+  const { isAdmin } = useAuth();
+  const [schedulerGap, setSchedulerGap] = useState(4);
+  const [savingGap, setSavingGap] = useState(false);
+
+  const loadSchedulerSettings = async () => {
+    try {
+      const r = await api.get("/scheduler-settings");
+      setSchedulerGap(Number(r.data.saglikci_max_nobet_araligi || 4));
+    } catch (e) {
+      toast.error("Nöbet aralığı ayarı okunamadı: " + (e.response?.data?.detail || e.message));
+    }
+  };
+
+  useEffect(() => {
+    loadSchedulerSettings();
+  }, []);
+
+  const saveSchedulerGap = async () => {
+    const value = Number(schedulerGap);
+    if (!Number.isFinite(value) || value < 1) {
+      toast.error("Sağlıkçı maksimum nöbet aralığı en az 1 olmalıdır");
+      return;
+    }
+    setSavingGap(true);
+    try {
+      const r = await api.patch("/scheduler-settings", { saglikci_max_nobet_araligi: value });
+      setSchedulerGap(Number(r.data.saglikci_max_nobet_araligi || value));
+      toast.success("Sağlıkçı maksimum nöbet aralığı güncellendi");
+    } catch (e) {
+      toast.error("Kaydedilemedi: " + (e.response?.data?.detail || e.message));
+    } finally {
+      setSavingGap(false);
+    }
+  };
 
   const seedDemo = async () => {
     try {
@@ -63,6 +101,37 @@ export default function Settings() {
         </CardContent>
       </Card>
 
+      <Card data-testid="scheduler-settings-card">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 font-heading"><SlidersHorizontal className="w-5 h-5" /> Nöbet Algoritma Ayarları</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="grid grid-cols-1 sm:grid-cols-[280px_1fr] gap-3 items-end">
+            <div>
+              <Label htmlFor="saglikci-max-gap">Sağlıkçı maksimum nöbet aralığı (gün)</Label>
+              <Input
+                id="saglikci-max-gap"
+                type="number"
+                min={1}
+                value={schedulerGap}
+                onChange={(e) => setSchedulerGap(e.target.value)}
+                data-testid="saglikci-max-gap-input"
+              />
+            </div>
+            <div className="flex gap-2">
+              <Button onClick={saveSchedulerGap} disabled={!isAdmin || savingGap} data-testid="saglikci-max-gap-save-btn">
+                {savingGap ? "Kaydediliyor..." : "Kaydet"}
+              </Button>
+              {!isAdmin && <span className="text-xs text-muted-foreground self-center">Bu ayarı sadece admin değiştirebilir.</span>}
+            </div>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Bu ayar yalnızca <strong>Sağlıkçı</strong> ve <strong>Sağlıkçı + Sürücü</strong> personellere uygulanır.
+            Sadece <strong>Sürücü</strong> rolündekilere uygulanmaz.
+          </p>
+        </CardContent>
+      </Card>
+
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 font-heading"><Database className="w-5 h-5" /> Veri</CardTitle>
@@ -81,7 +150,7 @@ export default function Settings() {
         <CardHeader><CardTitle className="font-heading">Kurallar</CardTitle></CardHeader>
         <CardContent className="text-sm text-muted-foreground space-y-2">
           <p><strong className="text-foreground">Kesin (Hard) Kurallar:</strong> Yıllık izin, min 12s sürücü dinlenmesi, sağlıkçı arka arkaya 24s yasağı, sürücü max 3 gün üst üste, rol uyumluluğu, iki 24s arasında en az 1 gün.</p>
-          <p><strong className="text-foreground">Tercih (Soft) Kurallar:</strong> Çalışma saati dengesi, nöbet sayısı dengesi, hafta sonu dengesi, resmi tatil dengesi, gündüz/gece dengesi, "Nöbet istemiyorum" tercihleri.</p>
+          <p><strong className="text-foreground">Tercih (Soft) Kurallar:</strong> Çalışma saati dengesi, nöbet sayısı dengesi, hafta sonu dengesi, resmi tatil dengesi, gündüz/gece dengesi, "Nöbet istemiyorum" tercihleri, sağlıkçı nöbet aralığı dengesi.</p>
         </CardContent>
       </Card>
     </div>

@@ -9,7 +9,7 @@ import uuid
 PersonnelType = Literal["saglikci", "surucu", "saglikci_surucu"]
 LeaveStatus = Literal["yillik_izin", "nobet_istemiyor"]
 TaskKind = Literal["saglikci_24", "surucu_gunduz", "surucu_gece", "surucu_24"]
-SurucuTercihi = Literal["12", "24", "yok"]
+SurucuTercihi = Literal["12", "24", "24_saat_surucu", "yok"]
 UserRole = Literal["admin", "istasyon_sorumlusu"]
 
 
@@ -166,6 +166,15 @@ class GenerateRequest(BaseModel):
     ignore_leave_ids: List[str] = []  # leave request ids to ignore
     max_gun_asiri: int = 3  # max shifts for gün aşırı çalışma sağlıkçı
     rastgele_yoksay: bool = False  # çakışan istekleri rastgele göz ardı et
+    saglikci_max_nobet_araligi: Optional[int] = None  # None ise istasyon ayarından okunur
+
+
+class SchedulerSettings(BaseModel):
+    saglikci_max_nobet_araligi: int = 4
+
+
+class SchedulerSettingsUpdate(BaseModel):
+    saglikci_max_nobet_araligi: int
 
 
 # ---------------- Holidays ----------------

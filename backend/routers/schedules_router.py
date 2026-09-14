@@ -6,10 +6,11 @@ import random
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 
-from deps import db, current_station
+from deps import db, current_station, require_admin
 from models import (
     GenerateRequest, ManualUpdateRequest, CarryoverSet,
     TemplateCreate, Template, TemplateApply, LeaveRequest,
+    SchedulerSettings, SchedulerSettingsUpdate,
 )
 from scheduler import generate_schedule, validate_manual_assignment, compute_violations, TASKS
 from helpers import (
@@ -18,6 +19,35 @@ from helpers import (
 )
 
 router = APIRouter(prefix="/api", tags=["schedules"])
+
+DEFAULT_SCHEDULER_SETTINGS = {"saglikci_max_nobet_araligi": 4}
+
+
+async def _get_scheduler_settings(istasyon_id: str) -> dict:
+    doc = await db.scheduler_settings.find_one({"istasyon_id": istasyon_id}, {"_id": 0})
+    return {**DEFAULT_SCHEDULER_SETTINGS, **(doc or {})}
+
+
+@router.get("/scheduler-settings", response_model=SchedulerSettings)
+async def get_scheduler_settings(istasyon_id: str = Depends(current_station)):
+    settings = await _get_scheduler_settings(istasyon_id)
+    return SchedulerSettings(saglikci_max_nobet_araligi=settings["saglikci_max_nobet_araligi"])
+
+
+@router.patch("/scheduler-settings", response_model=SchedulerSettings)
+async def update_scheduler_settings(
+    data: SchedulerSettingsUpdate,
+    _user: dict = Depends(require_admin),
+    istasyon_id: str = Depends(current_station),
+):
+    if data.saglikci_max_nobet_araligi < 1:
+        raise HTTPException(400, "Sağlıkçı maksimum nöbet aralığı en az 1 olmalıdır")
+    await db.scheduler_settings.update_one(
+        {"istasyon_id": istasyon_id},
+        {"$set": {"istasyon_id": istasyon_id, "saglikci_max_nobet_araligi": int(data.saglikci_max_nobet_araligi)}},
+        upsert=True,
+    )
+    return SchedulerSettings(saglikci_max_nobet_araligi=int(data.saglikci_max_nobet_araligi))
 
 
 @router.get("/schedule/{yil}/{ay}")
@@ -39,13 +69,25 @@ async def do_generate(req: GenerateRequest, istasyon_id: str = Depends(current_s
     carry = await get_carryover(req.yil, req.ay, istasyon_id)
     ignored = list(req.ignore_leave_ids)
 
+    settings = await _get_scheduler_settings(istasyon_id)
+    saglikci_gap = int(req.saglikci_max_nobet_araligi or settings["saglikci_max_nobet_araligi"])
+
     attempts = 0
     while True:
         leaves = await build_leaves_map(istasyon_id, ignored)
         tinfo = await build_targets(req.yil, req.ay, active, leaves)
         targets = {k: t["normal_hedef"] for k, t in tinfo.items()}
-        schedule, errors = generate_schedule(req.yil, req.ay, active, leaves, req.max_gun_asiri,
-                                             holidays, carry["gunler"], targets)
+        schedule, errors = generate_schedule(
+            req.yil,
+            req.ay,
+            active,
+            leaves,
+            req.max_gun_asiri,
+            holidays,
+            carry["gunler"],
+            targets,
+            saglikci_max_nobet_araligi=saglikci_gap,
+        )
         conflicts = await find_conflicts(errors, ignored, pmap, istasyon_id)
         if not errors or not req.rastgele_yoksay or attempts >= 10:
             break
@@ -82,13 +124,25 @@ async def manual_update(req: ManualUpdateRequest, istasyon_id: str = Depends(cur
     leaves = await build_leaves_map(istasyon_id, doc.get("yoksayilan_istekler"))
     carry = await get_carryover(req.yil, req.ay, istasyon_id)
 
+    settings = await _get_scheduler_settings(istasyon_id)
+    saglikci_gap = int(settings["saglikci_max_nobet_araligi"])
+
     if req.personel_id:
         if not any(p["id"] == req.personel_id for p in personnel):
             raise HTTPException(404, "Personel bulunamadı")
         tinfo = await build_targets(req.yil, req.ay, personnel, leaves)
         targets = {k: t["normal_hedef"] for k, t in tinfo.items()}
-        ok, msg = validate_manual_assignment(doc, req.tarih, req.slot, req.personel_id, personnel,
-                                             leaves, carry["gunler"], targets)
+        ok, msg = validate_manual_assignment(
+            doc,
+            req.tarih,
+            req.slot,
+            req.personel_id,
+            personnel,
+            leaves,
+            carry["gunler"],
+            targets,
+            saglikci_max_nobet_araligi=saglikci_gap,
+        )
         if not ok:
             return {"success": False, "message": f"Kural ihlali: {msg}"}
 
@@ -136,7 +190,17 @@ async def get_violations(yil: int, ay: int, istasyon_id: str = Depends(current_s
     carry = await get_carryover(yil, ay, istasyon_id)
     tinfo = await build_targets(yil, ay, personnel, leaves)
     targets = {k: t["normal_hedef"] for k, t in tinfo.items()}
-    return {"violations": compute_violations(doc, personnel, leaves, carry["gunler"], targets)}
+    settings = await _get_scheduler_settings(istasyon_id)
+    return {
+        "violations": compute_violations(
+            doc,
+            personnel,
+            leaves,
+            carry["gunler"],
+            targets,
+            saglikci_max_nobet_araligi=int(settings["saglikci_max_nobet_araligi"]),
+        )
+    }
 
 
 @router.get("/schedule/{yil}/{ay}/personnel/{pid}/card")
@@ -167,6 +231,8 @@ async def slot_candidates(req: CandidatesRequest, istasyon_id: str = Depends(cur
     current = next((g.get(req.slot) for g in doc["gunler"] if g["tarih"] == req.tarih), None)
     tinfo = await build_targets(req.yil, req.ay, personnel, leaves)
     targets = {k: t["normal_hedef"] for k, t in tinfo.items()}
+    settings = await _get_scheduler_settings(istasyon_id)
+    saglikci_gap = int(settings["saglikci_max_nobet_araligi"])
     roles = {"saglikci_1": ("saglikci", "saglikci_surucu"), "saglikci_2": ("saglikci", "saglikci_surucu"),
              "surucu_gunduz": ("surucu", "saglikci_surucu"), "surucu_gece": ("surucu", "saglikci_surucu"),
              "surucu_24": ("saglikci_surucu",)}[req.slot]
@@ -174,8 +240,17 @@ async def slot_candidates(req: CandidatesRequest, istasyon_id: str = Depends(cur
     for p in personnel:
         if not p.get("aktif", True) or p["personel_turu"] not in roles:
             continue
-        ok, msg = validate_manual_assignment(doc, req.tarih, req.slot, p["id"], personnel,
-                                             leaves, carry["gunler"], targets)
+        ok, msg = validate_manual_assignment(
+            doc,
+            req.tarih,
+            req.slot,
+            p["id"],
+            personnel,
+            leaves,
+            carry["gunler"],
+            targets,
+            saglikci_max_nobet_araligi=saglikci_gap,
+        )
         out.append({
             "personel_id": p["id"], "ad_soyad": p["ad_soyad"], "personel_turu": p["personel_turu"],
             "uygun": ok, "mesaj": msg, "mevcut": p["id"] == current,
@@ -203,7 +278,15 @@ async def schedule_summary(yil: int, ay: int, istasyon_id: str = Depends(current
     leaves = await build_leaves_map(istasyon_id, doc.get("yoksayilan_istekler"))
     carry = await get_carryover(yil, ay, istasyon_id)
     tinfo = await build_targets(yil, ay, personnel, leaves)
-    viol = compute_violations(doc, personnel, leaves, carry["gunler"], {k: t["normal_hedef"] for k, t in tinfo.items()})
+    settings = await _get_scheduler_settings(istasyon_id)
+    viol = compute_violations(
+        doc,
+        personnel,
+        leaves,
+        carry["gunler"],
+        {k: t["normal_hedef"] for k, t in tinfo.items()},
+        saglikci_max_nobet_araligi=int(settings["saglikci_max_nobet_araligi"]),
+    )
     empty = []
     for g in doc["gunler"]:
         if not g.get("saglikci_1"):

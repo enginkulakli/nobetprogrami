@@ -125,9 +125,9 @@ def test_24h_driver_preference():
     if not emre:
         # pick any saglikci_surucu
         emre = next(p for p in ppl if p["personel_turu"] == "saglikci_surucu")
-    r = requests.patch(f"{API}/personnel/{emre['id']}", json={"surucu_tercihi": "24"})
+    r = requests.patch(f"{API}/personnel/{emre['id']}", json={"surucu_tercihi": "24_saat_surucu"})
     assert r.status_code == 200
-    assert r.json()["surucu_tercihi"] == "24"
+    assert r.json()["surucu_tercihi"] == "24_saat_surucu"
 
     # ensure all overtime and regen
     ids = [p["id"] for p in ppl]

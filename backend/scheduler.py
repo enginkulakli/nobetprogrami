@@ -29,6 +29,10 @@ TASKS = {
 }
 
 
+def _is_24h_driver_preference(pref: str) -> bool:
+    return pref in ("24", "24_saat_surucu")
+
+
 def compute_normal_target(yil: int, ay: int, pid: str, leaves: Dict[str, Dict[str, str]], holidays: set) -> dict:
     """Hafta içi gün × 8 − hafta içi resmi tatil − hafta içi yıllık izin."""
     weekdays = [d for d in _iter_days(yil, ay) if d.weekday() < 5]
@@ -71,12 +75,14 @@ def _task_datetime_range(d: date, task: str) -> Tuple[float, float]:
 class SchedulerContext:
     """Tracks state during generation for hard-constraint checking & soft balancing."""
     def __init__(self, personnel: List[dict], leaves: Dict[str, Dict[str, str]],
-                 holidays: Optional[set] = None, targets: Optional[Dict[str, int]] = None):
+                 holidays: Optional[set] = None, targets: Optional[Dict[str, int]] = None,
+                 saglikci_max_nobet_araligi: int = 4):
         # personnel: list of dicts with id, personel_turu, aktif, hedef_saat, ad_soyad
         self.personnel = {p["id"]: p for p in personnel if p.get("aktif", True)}
         self.leaves = leaves  # {pid: {date_iso: status}}
         self.holidays = holidays or set()  # iso date strings
         self.targets = targets or {}  # pid -> normal aylık hedef saat
+        self.saglikci_max_nobet_araligi = max(1, int(saglikci_max_nobet_araligi or 4))
         # per-personnel tracking
         self.pid_assignments: Dict[str, List[Tuple[date, str, float, float]]] = {
             pid: [] for pid in self.personnel
@@ -101,6 +107,31 @@ class SchedulerContext:
                 pid = day.get(slot)
                 if pid and pid in self.personnel:
                     self.assign(pid, date.fromisoformat(day["tarih"]), task, count_stats=False)
+
+    def _is_gap_constrained(self, pid: str) -> bool:
+        tur = self.personnel.get(pid, {}).get("personel_turu")
+        return tur in ("saglikci", "saglikci_surucu")
+
+    def _last_assignment_date(self, pid: str, before: Optional[date] = None) -> Optional[date]:
+        entries = self.pid_assignments.get(pid, [])
+        dates = [dd for (dd, _t, _s, _e) in entries if before is None or dd < before]
+        if not dates:
+            return None
+        return max(dates)
+
+    def gap_full_days_before(self, pid: str, d: date) -> Optional[int]:
+        prev = self._last_assignment_date(pid, before=d)
+        if prev is None:
+            return None
+        return max(0, (d - prev).days - 1)
+
+    def requires_gap_assignment_today(self, pid: str, d: date) -> bool:
+        if not self._is_gap_constrained(pid):
+            return False
+        gap = self.gap_full_days_before(pid, d)
+        if gap is None:
+            return False
+        return gap >= self.saglikci_max_nobet_araligi
 
     # ---------- hard constraint checks ----------
     def can_assign(self, pid: str, d: date, task: str, max_gun_asiri: int = 3) -> Tuple[bool, str]:
@@ -235,10 +266,11 @@ class SchedulerContext:
                     score -= (hedef_half - cur) * 4.0
         # 1c) sürücü tercihi (12s / 24s)
         tercih = p.get("surucu_tercihi", "yok")
+        prefers_24_driver = _is_24h_driver_preference(tercih)
         if task == "surucu_24" and tercih == "12":
             score += 30.0
-        if task in ("surucu_gunduz", "surucu_gece") and tercih == "24":
-            score += 10.0
+        if task in ("surucu_gunduz", "surucu_gece") and prefers_24_driver:
+            score += 14.0
         # 2) toplam nöbet sayısı
         score += self.total_shifts[pid] * 1.5
         # 3) hafta sonu dengesi
@@ -256,8 +288,13 @@ class SchedulerContext:
         if self.leaves.get(pid, {}).get(d.isoformat()) == "nobet_istemiyor":
             score += 20.0
         # 6) 24h sürücü: tercih etmeyenler için soft ceza
-        if task == "surucu_24" and tercih != "24":
+        if task == "surucu_24" and not prefers_24_driver:
             score += 15.0
+        # 7) sağlıkçı ve sağlıkçı+sürücü için nöbet aralığı dengelemesi
+        if self._is_gap_constrained(pid):
+            gap_days = self.gap_full_days_before(pid, d)
+            if gap_days is not None:
+                score -= min(gap_days, self.saglikci_max_nobet_araligi + 2) * 6.0
         # tiebreaker: rastgele küçük
         score += random.random() * 0.01
         return score
@@ -271,6 +308,12 @@ def _pick_best(ctx: SchedulerContext, candidates: List[str], d: date, task: str,
             valid.append(pid)
     if not valid:
         return None
+
+    # Sağlıkçı nöbet aralığı kuralı: bugün atanmazsa sınırı aşacak personel önceliklidir.
+    urgent = [pid for pid in valid if ctx.requires_gap_assignment_today(pid, d)]
+    if urgent:
+        valid = urgent
+
     valid.sort(key=lambda pid: ctx.score_candidate(pid, d, task))
     return valid[0]
 
@@ -284,11 +327,18 @@ def generate_schedule(
     holidays: Optional[set] = None,
     carryover_days: Optional[List[dict]] = None,
     targets: Optional[Dict[str, int]] = None,
+    saglikci_max_nobet_araligi: int = 4,
 ) -> Tuple[MonthlySchedule, List[str]]:
     """
     Returns (MonthlySchedule, errors). errors non-empty means partial/failed.
     """
-    ctx = SchedulerContext(personnel, leaves, holidays, targets)
+    ctx = SchedulerContext(
+        personnel,
+        leaves,
+        holidays,
+        targets,
+        saglikci_max_nobet_araligi=saglikci_max_nobet_araligi,
+    )
     ctx.preload_days(carryover_days or [])
     days = _iter_days(yil, ay)
     schedule = MonthlySchedule(yil=yil, ay=ay, gunler=[], assignments=[])
@@ -337,8 +387,10 @@ def generate_schedule(
 
         # Step 2: sürücü ata - 24s tercihli Sağlıkçı+Sürücü varsa 24s; yoksa 12h iki vardiya, olmazsa 24h
         used_pids = {s1, s2}
-        pool_24_pref = [p for p in surucu_24_ids if p not in used_pids
-                        and ctx.personnel[p].get("surucu_tercihi") == "24"]
+        pool_24_pref = [
+            p for p in surucu_24_ids
+            if p not in used_pids and _is_24h_driver_preference(ctx.personnel[p].get("surucu_tercihi", "yok"))
+        ]
         s24_pref = _pick_best(ctx, pool_24_pref, d, "surucu_24", max_gun_asiri)
         if s24_pref:
             ctx.assign(s24_pref, d, "surucu_24")
@@ -380,6 +432,21 @@ def generate_schedule(
 
         schedule.gunler.append(day)
 
+    # Step 3: Sağlıkçı ve Sağlıkçı+Sürücü için maksimum nöbet aralığı kontrolü
+    for pid, p in ctx.personnel.items():
+        if p.get("personel_turu") not in ("saglikci", "saglikci_surucu"):
+            continue
+        assigned_dates = sorted({dd for (dd, _t, _s, _e) in ctx.pid_assignments.get(pid, [])})
+        if len(assigned_dates) < 2:
+            continue
+        for prev, cur in zip(assigned_dates, assigned_dates[1:]):
+            gap = (cur - prev).days - 1
+            if gap > ctx.saglikci_max_nobet_araligi:
+                errors.append(
+                    f"{p.get('ad_soyad', pid)}: {prev.isoformat()} ile {cur.isoformat()} arasında {gap} tam gün boşluk var "
+                    f"(izin verilen en fazla: {ctx.saglikci_max_nobet_araligi})"
+                )
+
     schedule.ihlaller = errors[:]
     return schedule, errors
 
@@ -393,12 +460,19 @@ def validate_manual_assignment(
     leaves: Dict[str, Dict[str, str]],
     carryover_days: Optional[List[dict]] = None,
     targets: Optional[Dict[str, int]] = None,
+    saglikci_max_nobet_araligi: int = 4,
 ) -> Tuple[bool, str]:
     """Validates changing a single slot manually against all hard rules."""
     if new_pid is None:
         return True, ""
     # rebuild context up to this schedule
-    ctx = SchedulerContext(personnel, leaves, None, targets)
+    ctx = SchedulerContext(
+        personnel,
+        leaves,
+        None,
+        targets,
+        saglikci_max_nobet_araligi=saglikci_max_nobet_araligi,
+    )
     ctx.preload_days(carryover_days or [])
     slot_to_task = SLOT_TO_TASK
     task_new = slot_to_task[slot]
@@ -426,6 +500,7 @@ def compute_violations(
     leaves: Dict[str, Dict[str, str]],
     carryover_days: Optional[List[dict]] = None,
     targets: Optional[Dict[str, int]] = None,
+    saglikci_max_nobet_araligi: int = 4,
 ) -> List[dict]:
     """Her dolu hücre için diğer tüm atamalara göre kural ihlali / tercih uyarısı üretir."""
     cells = []
@@ -437,7 +512,13 @@ def compute_violations(
 
     out = []
     for tarih, slot, task, pid in cells:
-        ctx = SchedulerContext(personnel, leaves, None, targets)
+        ctx = SchedulerContext(
+            personnel,
+            leaves,
+            None,
+            targets,
+            saglikci_max_nobet_araligi=saglikci_max_nobet_araligi,
+        )
         ctx.preload_days(carryover_days or [])
         for t2, s2, task2, pid2 in cells:
             if (t2, s2) == (tarih, slot) or pid2 not in ctx.personnel:
