@@ -146,13 +146,6 @@ export default function Settings() {
       <TemplatesCard />
       <HolidaysCard />
 
-      <Card>
-        <CardHeader><CardTitle className="font-heading">Kurallar</CardTitle></CardHeader>
-        <CardContent className="text-sm text-muted-foreground space-y-2">
-          <p><strong className="text-foreground">Kesin (Hard) Kurallar:</strong> Yıllık izin, min 12s sürücü dinlenmesi, sağlıkçı arka arkaya 24s yasağı, sürücü max 3 gün üst üste, rol uyumluluğu, iki 24s arasında en az 1 gün.</p>
-          <p><strong className="text-foreground">Tercih (Soft) Kurallar:</strong> Çalışma saati dengesi, nöbet sayısı dengesi, hafta sonu dengesi, resmi tatil dengesi, gündüz/gece dengesi, "Nöbet istemiyorum" tercihleri, sağlıkçı nöbet aralığı dengesi.</p>
-        </CardContent>
-      </Card>
     </div>
   );
 }

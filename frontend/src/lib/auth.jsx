@@ -1,5 +1,14 @@
 import { createContext, useContext, useEffect, useState, useCallback } from "react";
-import { api, TOKEN_KEY, STATION_KEY, formatApiError } from "@/lib/api";
+import {
+  api,
+  TOKEN_KEY,
+  STATION_KEY,
+  formatApiError,
+  readAuthValue,
+  writeAuthValue,
+  removeAuthValue,
+  clearAuthStorage,
+} from "@/lib/api";
 
 const AuthContext = createContext(null);
 
@@ -7,7 +16,7 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [stations, setStations] = useState([]);
-  const [stationId, setStationIdState] = useState(() => localStorage.getItem(STATION_KEY) || "");
+  const [stationId, setStationIdState] = useState(() => readAuthValue(STATION_KEY) || "");
 
   const isAdmin = user?.role === "admin";
 
@@ -24,7 +33,7 @@ export function AuthProvider({ children }) {
   const applyUser = useCallback(async (u) => {
     setUser(u);
     if (u.role === "istasyon_sorumlusu" && u.istasyon_id) {
-      localStorage.setItem(STATION_KEY, u.istasyon_id);
+      writeAuthValue(STATION_KEY, u.istasyon_id);
       setStationIdState(u.istasyon_id);
     } else if (u.role === "admin") {
       await refreshStations();
@@ -32,32 +41,48 @@ export function AuthProvider({ children }) {
   }, [refreshStations]);
 
   useEffect(() => {
-    const token = localStorage.getItem(TOKEN_KEY);
+    // Eski sürümden kalan kalıcı auth kayıtları varsa temizle
+    clearAuthStorage();
+
+    const token = readAuthValue(TOKEN_KEY);
     if (!token) { setLoading(false); return; }
     api.get("/auth/me")
       .then((r) => applyUser(r.data))
-      .catch(() => localStorage.removeItem(TOKEN_KEY))
+      .catch(() => removeAuthValue(TOKEN_KEY))
       .finally(() => setLoading(false));
   }, [applyUser]);
 
+  useEffect(() => {
+    // Kullanıcı siteden çıkınca (sekmeyi/pencereyi kapatınca veya sayfadan ayrılınca)
+    // oturumu otomatik kapat.
+    const handleExit = () => {
+      clearAuthStorage();
+    };
+    window.addEventListener("beforeunload", handleExit);
+    window.addEventListener("pagehide", handleExit);
+    return () => {
+      window.removeEventListener("beforeunload", handleExit);
+      window.removeEventListener("pagehide", handleExit);
+    };
+  }, []);
+
   const login = async (kullanici_adi, sifre) => {
     const r = await api.post("/auth/login", { kullanici_adi, sifre });
-    localStorage.setItem(TOKEN_KEY, r.data.token);
+    writeAuthValue(TOKEN_KEY, r.data.token);
     await applyUser(r.data.user);
     return r.data.user;
   };
 
   const logout = () => {
-    localStorage.removeItem(TOKEN_KEY);
-    localStorage.removeItem(STATION_KEY);
+    clearAuthStorage();
     setUser(null);
     setStationIdState("");
     window.location.href = "/login";
   };
 
   const setStationId = (id) => {
-    if (id) localStorage.setItem(STATION_KEY, id);
-    else localStorage.removeItem(STATION_KEY);
+    if (id) writeAuthValue(STATION_KEY, id);
+    else removeAuthValue(STATION_KEY);
     setStationIdState(id);
   };
 

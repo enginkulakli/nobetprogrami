@@ -6,12 +6,50 @@ export const API = `${BACKEND_URL}/api`;
 export const TOKEN_KEY = "nobet-token";
 export const STATION_KEY = "nobet-istasyon";
 
+function getAuthStorage() {
+  if (typeof window === "undefined") return null;
+  try {
+    return window.sessionStorage;
+  } catch {
+    return null;
+  }
+}
+
+const AUTH_STORAGE = getAuthStorage();
+
+export function readAuthValue(key) {
+  return AUTH_STORAGE?.getItem(key) || "";
+}
+
+export function writeAuthValue(key, value) {
+  if (!AUTH_STORAGE) return;
+  AUTH_STORAGE.setItem(key, value);
+}
+
+export function removeAuthValue(key) {
+  AUTH_STORAGE?.removeItem(key);
+}
+
+export function clearAuthStorage() {
+  removeAuthValue(TOKEN_KEY);
+  removeAuthValue(STATION_KEY);
+  // Önceki sürümlerden kalan kalıcı token/station verilerini de temizle
+  if (typeof window !== "undefined") {
+    try {
+      window.localStorage.removeItem(TOKEN_KEY);
+      window.localStorage.removeItem(STATION_KEY);
+    } catch {
+      // no-op
+    }
+  }
+}
+
 export const api = axios.create({ baseURL: API });
 
 api.interceptors.request.use((config) => {
-  const token = localStorage.getItem(TOKEN_KEY);
+  const token = readAuthValue(TOKEN_KEY);
   if (token) config.headers.Authorization = `Bearer ${token}`;
-  const st = localStorage.getItem(STATION_KEY);
+  const st = readAuthValue(STATION_KEY);
   if (st) config.headers["X-Istasyon-Id"] = st;
   return config;
 });
@@ -21,7 +59,7 @@ api.interceptors.response.use(
   (err) => {
     const url = err.config?.url || "";
     if (err.response?.status === 401 && !url.includes("/auth/login")) {
-      localStorage.removeItem(TOKEN_KEY);
+      clearAuthStorage();
       if (window.location.pathname !== "/login") window.location.href = "/login";
     }
     return Promise.reject(err);
