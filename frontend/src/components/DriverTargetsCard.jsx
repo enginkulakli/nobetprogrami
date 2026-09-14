@@ -41,7 +41,7 @@ export function DriverTargetsCard() {
         <CardTitle className="flex items-center gap-2 font-heading"><Car className="w-5 h-5" /> Sürücü Nöbet Hedefleri</CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
-        <p className="text-sm text-muted-foreground">Yalnızca <strong>Sürücü</strong> rolündeki personel için: ayın 1–15'i ve 16–ay sonu aralığında tutulması gereken nöbet sayısı. Boş bırakılan alan için hedef uygulanmaz. Dinlenme ve ardışık nöbet kuralları her zaman önceliklidir.</p>
+        <p className="text-sm text-muted-foreground">Yalnızca <strong>Sürücü</strong> rolündeki personel için: ayın 1–15'i ve 16–ay sonu aralıklarına girdiğiniz değerler <strong>zorunlu minimum</strong> sürücü nöbet sayısıdır. Sistem bu minimumları mutlaka doldurmaya çalışır; boş bırakılan alan için minimum uygulanmaz. Dinlenme ve ardışık nöbet gibi zorunlu kurallar her zaman önceliklidir.</p>
         {drivers.length === 0 ? (
           <div className="text-sm text-muted-foreground p-4 rounded-md bg-secondary text-center" data-testid="driver-targets-empty">Sürücü rolünde personel yok.</div>
         ) : (

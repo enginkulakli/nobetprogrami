@@ -131,6 +131,25 @@ export default function Schedule() {
     catch (e) { toast.error(formatApiError(e)); }
   };
 
+  const deleteSchedule = async () => {
+    if (!schedule) return;
+    const ok = window.confirm("Bu ayın tüm nöbet listesini silmek istediğinize emin misiniz?");
+    if (!ok) return;
+    try {
+      await api.delete("/schedule", { params: { yil, ay } });
+      setSchedule(null);
+      setErrors([]);
+      setViolations({});
+      setConflicts([]);
+      setHint(null);
+      toast.success("Nöbet listesi tamamen silindi");
+      setRefreshKey((k) => k + 1);
+      await loadSchedule();
+    } catch (e) {
+      toast.error("Silinemedi: " + formatApiError(e));
+    }
+  };
+
   return (
     <TooltipProvider delayDuration={150}>
     <div className="space-y-6" data-testid="schedule-page">
@@ -183,6 +202,7 @@ export default function Schedule() {
               <Button variant="outline" onClick={exportPdf} data-testid="export-pdf-btn"><FileText className="w-4 h-4 mr-2" />PDF</Button>
               <Button variant="outline" onClick={() => window.print()} data-testid="print-btn"><Printer className="w-4 h-4 mr-2" />Yazdır</Button>
               <Button variant="outline" onClick={() => setCardOpen(true)} data-testid="personnel-card-btn"><IdCard className="w-4 h-4 mr-2" />Personel Kartı</Button>
+              <Button variant="destructive" onClick={deleteSchedule} data-testid="delete-schedule-btn">Nöbet Listesini Tamamen Sil</Button>
             </>
           )}
         </div>

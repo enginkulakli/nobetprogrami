@@ -33,6 +33,88 @@ def _is_24h_driver_preference(pref: str) -> bool:
     return pref in ("24", "24_saat_surucu")
 
 
+DRIVER_TASKS = {"surucu_gunduz", "surucu_gece", "surucu_24"}
+PERIOD_LABELS = {1: "1-15", 2: "16-son"}
+
+
+def _period_index_for_day(d: date) -> int:
+    return 1 if d.day <= 15 else 2
+
+
+def _build_mandatory_driver_minimums(personnel: List[dict]) -> Dict[int, Dict[str, int]]:
+    """Kişi bazında dönemlik zorunlu minimum sürücü nöbet sayıları."""
+    minimums: Dict[int, Dict[str, int]] = {1: {}, 2: {}}
+    for p in personnel:
+        if not p.get("aktif", True):
+            continue
+        h1 = p.get("nobet_hedef_1_15")
+        h2 = p.get("nobet_hedef_16_son")
+        if h1 is not None:
+            minimums[1][p["id"]] = max(0, int(h1))
+        if h2 is not None:
+            minimums[2][p["id"]] = max(0, int(h2))
+    return minimums
+
+
+def _driver_count_for_period(ctx: "SchedulerContext", pid: str, period_idx: int) -> int:
+    return ctx.driver_half1_shifts.get(pid, 0) if period_idx == 1 else ctx.driver_half2_shifts.get(pid, 0)
+
+
+def _driver_minimum_deficits(ctx: "SchedulerContext", minimums: Dict[int, Dict[str, int]], period_idx: int) -> Dict[str, int]:
+    out: Dict[str, int] = {}
+    for pid, required in minimums.get(period_idx, {}).items():
+        if pid not in ctx.personnel:
+            continue
+        current = _driver_count_for_period(ctx, pid, period_idx)
+        deficit = max(0, int(required) - int(current))
+        if deficit > 0:
+            out[pid] = deficit
+    return out
+
+
+def _pick_best_driver_12(
+    ctx: "SchedulerContext",
+    candidates: List[str],
+    d: date,
+    task: str,
+    max_gun_asiri: int,
+    deficits: Dict[str, int],
+):
+    """12s sürücü atamalarında eksik minimumu olanları (en büyük açık önce) öne çıkarır."""
+    valid = []
+    for pid in candidates:
+        ok, _ = ctx.can_assign(pid, d, task, max_gun_asiri)
+        if ok:
+            valid.append(pid)
+    if not valid:
+        return None
+
+    max_deficit = max((deficits.get(pid, 0) for pid in valid), default=0)
+    if max_deficit > 0:
+        valid = [pid for pid in valid if deficits.get(pid, 0) == max_deficit]
+
+    valid.sort(key=lambda pid: ctx.score_candidate(pid, d, task))
+    return valid[0]
+
+
+def _build_unmet_driver_minimum_messages(
+    ctx: "SchedulerContext",
+    minimums: Dict[int, Dict[str, int]],
+) -> List[str]:
+    messages: List[str] = []
+    for period_idx in (1, 2):
+        for pid, required in minimums.get(period_idx, {}).items():
+            if pid not in ctx.personnel:
+                continue
+            actual = _driver_count_for_period(ctx, pid, period_idx)
+            if actual < required:
+                name = ctx.personnel[pid].get("ad_soyad", pid)
+                messages.append(
+                    f"{name}: {PERIOD_LABELS[period_idx]} dönemi zorunlu sürücü nöbeti tamamlanamadı ({actual}/{required})"
+                )
+    return messages
+
+
 def compute_normal_target(yil: int, ay: int, pid: str, leaves: Dict[str, Dict[str, str]], holidays: set) -> dict:
     """Hafta içi gün × 8 − hafta içi resmi tatil − hafta içi yıllık izin."""
     weekdays = [d for d in _iter_days(yil, ay) if d.weekday() < 5]
@@ -99,6 +181,8 @@ class SchedulerContext:
         self.holiday_shifts: Dict[str, int] = {pid: 0 for pid in self.personnel}
         self.half1_shifts: Dict[str, int] = {pid: 0 for pid in self.personnel}
         self.half2_shifts: Dict[str, int] = {pid: 0 for pid in self.personnel}
+        self.driver_half1_shifts: Dict[str, int] = {pid: 0 for pid in self.personnel}
+        self.driver_half2_shifts: Dict[str, int] = {pid: 0 for pid in self.personnel}
 
     def preload_days(self, days: List[dict]):
         """Önceki aydan taşan nöbetleri (istatistik sayılmadan) dinlenme kontrolü için yükler."""
@@ -223,8 +307,12 @@ class SchedulerContext:
             self.holiday_shifts[pid] += 1
         if d.day <= 15:
             self.half1_shifts[pid] += 1
+            if task in DRIVER_TASKS:
+                self.driver_half1_shifts[pid] += 1
         else:
             self.half2_shifts[pid] += 1
+            if task in DRIVER_TASKS:
+                self.driver_half2_shifts[pid] += 1
         hrs = int(TASKS[task]["hours"])
         self.hours[pid] += hrs
         self.total_shifts[pid] += 1
@@ -344,6 +432,8 @@ def generate_schedule(
     schedule = MonthlySchedule(yil=yil, ay=ay, gunler=[], assignments=[])
     errors: List[str] = []
 
+    mandatory_driver_minimums = _build_mandatory_driver_minimums(personnel)
+
     # pre-compute candidate pools
     saglikci_ids = [pid for pid, p in ctx.personnel.items()
                     if p["personel_turu"] in ("saglikci", "saglikci_surucu")]
@@ -385,26 +475,33 @@ def generate_schedule(
                 tarih=d.isoformat(), personel_id=s2, gorev="saglikci_24",
                 baslangic="08:00", bitis="08:00", saat=24))
 
-        # Step 2: sürücü ata - 24s tercihli Sağlıkçı+Sürücü varsa 24s; yoksa 12h iki vardiya, olmazsa 24h
+        # Step 2: sürücü ata
         used_pids = {s1, s2}
-        pool_24_pref = [
-            p for p in surucu_24_ids
-            if p not in used_pids and _is_24h_driver_preference(ctx.personnel[p].get("surucu_tercihi", "yok"))
-        ]
-        s24_pref = _pick_best(ctx, pool_24_pref, d, "surucu_24", max_gun_asiri)
-        if s24_pref:
-            ctx.assign(s24_pref, d, "surucu_24")
-            day.surucu_24 = s24_pref
-            schedule.assignments.append(Assignment(
-                tarih=d.isoformat(), personel_id=s24_pref, gorev="surucu_24",
-                baslangic="08:00", bitis="08:00", saat=24))
-            schedule.gunler.append(day)
-            continue
+        period_idx = _period_index_for_day(d)
+        deficits = _driver_minimum_deficits(ctx, mandatory_driver_minimums, period_idx)
+        pending_minimums = bool(deficits)
 
+        # Zorunlu minimumlar tamamlanana kadar 12h sürücü atamasını öncele.
         pool_g = [p for p in surucu_12_ids if p not in used_pids]
-        gunduz = _pick_best(ctx, pool_g, d, "surucu_gunduz", max_gun_asiri)
+        gunduz = _pick_best_driver_12(ctx, pool_g, d, "surucu_gunduz", max_gun_asiri, deficits)
         pool_n = [p for p in surucu_12_ids if p not in used_pids and p != gunduz]
-        gece = _pick_best(ctx, pool_n, d, "surucu_gece", max_gun_asiri)
+        gece = _pick_best_driver_12(ctx, pool_n, d, "surucu_gece", max_gun_asiri, deficits)
+
+        if not pending_minimums:
+            # Önceki davranış: 24s tercihli Sağlıkçı+Sürücü önce dener.
+            pool_24_pref = [
+                p for p in surucu_24_ids
+                if p not in used_pids and _is_24h_driver_preference(ctx.personnel[p].get("surucu_tercihi", "yok"))
+            ]
+            s24_pref = _pick_best(ctx, pool_24_pref, d, "surucu_24", max_gun_asiri)
+            if s24_pref:
+                ctx.assign(s24_pref, d, "surucu_24")
+                day.surucu_24 = s24_pref
+                schedule.assignments.append(Assignment(
+                    tarih=d.isoformat(), personel_id=s24_pref, gorev="surucu_24",
+                    baslangic="08:00", bitis="08:00", saat=24))
+                schedule.gunler.append(day)
+                continue
 
         if gunduz and gece:
             ctx.assign(gunduz, d, "surucu_gunduz")
@@ -418,7 +515,7 @@ def generate_schedule(
                 tarih=d.isoformat(), personel_id=gece, gorev="surucu_gece",
                 baslangic="21:00", bitis="09:00", saat=12))
         else:
-            # fallback: 24h sürücü (sadece saglikci_surucu)
+            # 12h ikilisi kurulamıyorsa (hard kısıtlar nedeniyle) 24h fallback her zaman serbest.
             pool_24 = [p for p in surucu_24_ids if p not in used_pids]
             s24 = _pick_best(ctx, pool_24, d, "surucu_24", max_gun_asiri)
             if s24:
@@ -446,6 +543,8 @@ def generate_schedule(
                     f"{p.get('ad_soyad', pid)}: {prev.isoformat()} ile {cur.isoformat()} arasında {gap} tam gün boşluk var "
                     f"(izin verilen en fazla: {ctx.saglikci_max_nobet_araligi})"
                 )
+
+    errors.extend(_build_unmet_driver_minimum_messages(ctx, mandatory_driver_minimums))
 
     schedule.ihlaller = errors[:]
     return schedule, errors
@@ -511,6 +610,7 @@ def compute_violations(
                 cells.append((day["tarih"], slot, task, pid))
 
     out = []
+    mandatory_driver_minimums = _build_mandatory_driver_minimums(personnel)
     for tarih, slot, task, pid in cells:
         ctx = SchedulerContext(
             personnel,
@@ -532,4 +632,39 @@ def compute_violations(
             out.append({"tarih": tarih, "slot": slot, "tur": "hard", "mesaj": msg})
         elif leaves.get(pid, {}).get(tarih) == "nobet_istemiyor":
             out.append({"tarih": tarih, "slot": slot, "tur": "soft", "mesaj": "\"Nöbet istemiyorum\" tercihi göz ardı edildi"})
+    # Hücre bazlı ihlallere ek olarak dönemlik zorunlu sürücü minimumu ihlalleri.
+    ctx_all = SchedulerContext(
+        personnel,
+        leaves,
+        None,
+        targets,
+        saglikci_max_nobet_araligi=saglikci_max_nobet_araligi,
+    )
+    ctx_all.preload_days(carryover_days or [])
+    for day in schedule_doc.get("gunler", []):
+        dd = date.fromisoformat(day["tarih"])
+        for slot, task in SLOT_TO_TASK.items():
+            pid = day.get(slot)
+            if pid and pid in ctx_all.personnel:
+                ctx_all.assign(pid, dd, task)
+
+    yil = int(schedule_doc.get("yil", 0) or 0)
+    ay = int(schedule_doc.get("ay", 0) or 0)
+    if yil and ay:
+        for period_idx in (1, 2):
+            for pid, required in mandatory_driver_minimums.get(period_idx, {}).items():
+                if pid not in ctx_all.personnel:
+                    continue
+                actual = _driver_count_for_period(ctx_all, pid, period_idx)
+                if actual < required:
+                    out.append({
+                        "tarih": f"{yil:04d}-{ay:02d}-{'01' if period_idx == 1 else '16'}",
+                        "slot": f"surucu_minimum_{period_idx}",
+                        "tur": "hard",
+                        "mesaj": (
+                            f"{ctx_all.personnel[pid].get('ad_soyad', pid)}: {PERIOD_LABELS[period_idx]} dönemi "
+                            f"zorunlu sürücü nöbeti tamamlanamadı ({actual}/{required})"
+                        ),
+                    })
+
     return out

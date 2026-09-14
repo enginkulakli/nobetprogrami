@@ -58,6 +58,19 @@ async def get_schedule(yil: int, ay: int, istasyon_id: str = Depends(current_sta
     return {"exists": True, **doc}
 
 
+@router.delete("/schedule")
+async def delete_schedule(yil: int, ay: int, istasyon_id: str = Depends(current_station)):
+    """İlgili ayın istasyon nöbet listesini tamamen siler (idempotent)."""
+    res = await db.schedules.delete_one({"yil": yil, "ay": ay, "istasyon_id": istasyon_id})
+    return {
+        "success": True,
+        "yil": yil,
+        "ay": ay,
+        "silindi": bool(res.deleted_count),
+        "mesaj": "Bu aya ait nöbet listesi silindi" if res.deleted_count else "Bu aya ait silinecek nöbet listesi bulunamadı",
+    }
+
+
 @router.post("/schedule/generate")
 async def do_generate(req: GenerateRequest, istasyon_id: str = Depends(current_station)):
     personnel = await get_active_personnel_list(istasyon_id)
