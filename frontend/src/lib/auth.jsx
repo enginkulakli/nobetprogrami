@@ -8,6 +8,7 @@ import {
   writeAuthValue,
   removeAuthValue,
   clearAuthStorage,
+  clearLegacyAuthStorage,
 } from "@/lib/api";
 
 const AuthContext = createContext(null);
@@ -41,8 +42,13 @@ export function AuthProvider({ children }) {
   }, [refreshStations]);
 
   useEffect(() => {
-    // Eski sürümden kalan kalıcı auth kayıtları varsa temizle
-    clearAuthStorage();
+    // Oturum bilgisi artık sessionStorage'da tutulur; sekme/pencere kapatılınca
+    // tarayıcı bunu otomatik siler, böylece siteden çıkınca oturum kapanır ve
+    // tekrar girişte yeniden kimlik doğrulaması gerekir. Burada yalnızca eski
+    // sürümlerden kalan KALICI (localStorage) kayıtları temizliyoruz; aktif
+    // sessionStorage oturumuna dokunmuyoruz (aksi halde giriş sonrası tam sayfa
+    // yönlendirmesinde oturum silinir).
+    clearLegacyAuthStorage();
 
     const token = readAuthValue(TOKEN_KEY);
     if (!token) { setLoading(false); return; }
@@ -51,20 +57,6 @@ export function AuthProvider({ children }) {
       .catch(() => removeAuthValue(TOKEN_KEY))
       .finally(() => setLoading(false));
   }, [applyUser]);
-
-  useEffect(() => {
-    // Kullanıcı siteden çıkınca (sekmeyi/pencereyi kapatınca veya sayfadan ayrılınca)
-    // oturumu otomatik kapat.
-    const handleExit = () => {
-      clearAuthStorage();
-    };
-    window.addEventListener("beforeunload", handleExit);
-    window.addEventListener("pagehide", handleExit);
-    return () => {
-      window.removeEventListener("beforeunload", handleExit);
-      window.removeEventListener("pagehide", handleExit);
-    };
-  }, []);
 
   const login = async (kullanici_adi, sifre) => {
     const r = await api.post("/auth/login", { kullanici_adi, sifre });

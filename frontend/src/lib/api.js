@@ -30,18 +30,24 @@ export function removeAuthValue(key) {
   AUTH_STORAGE?.removeItem(key);
 }
 
+// Eski sürümlerde token/istasyon bilgisi kalıcı olarak localStorage'da tutuluyordu.
+// Bu yardımcı yalnızca o eski kalıcı kayıtları temizler; aktif oturumu (sessionStorage) TUTAR.
+export function clearLegacyAuthStorage() {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(TOKEN_KEY);
+    window.localStorage.removeItem(STATION_KEY);
+  } catch {
+    // no-op
+  }
+}
+
+// Aktif oturumu tamamen kapatır (çıkış / 401). Hem sessionStorage hem de
+// eski localStorage kayıtlarını temizler.
 export function clearAuthStorage() {
   removeAuthValue(TOKEN_KEY);
   removeAuthValue(STATION_KEY);
-  // Önceki sürümlerden kalan kalıcı token/station verilerini de temizle
-  if (typeof window !== "undefined") {
-    try {
-      window.localStorage.removeItem(TOKEN_KEY);
-      window.localStorage.removeItem(STATION_KEY);
-    } catch {
-      // no-op
-    }
-  }
+  clearLegacyAuthStorage();
 }
 
 export const api = axios.create({ baseURL: API });
