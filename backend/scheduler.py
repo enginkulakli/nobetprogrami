@@ -183,6 +183,9 @@ class SchedulerContext:
         self.half2_shifts: Dict[str, int] = {pid: 0 for pid in self.personnel}
         self.driver_half1_shifts: Dict[str, int] = {pid: 0 for pid in self.personnel}
         self.driver_half2_shifts: Dict[str, int] = {pid: 0 for pid in self.personnel}
+        self.overtime_shift_count: Dict[str, int] = {pid: 0 for pid in self.personnel}
+        self.overtime_half1_count: Dict[str, int] = {pid: 0 for pid in self.personnel}
+        self.overtime_half2_count: Dict[str, int] = {pid: 0 for pid in self.personnel}
 
     def preload_days(self, days: List[dict]):
         """Önceki aydan taşan nöbetleri (istatistik sayılmadan) dinlenme kontrolü için yükler."""
@@ -216,6 +219,25 @@ class SchedulerContext:
         if gap is None:
             return False
         return gap >= self.saglikci_max_nobet_araligi
+
+    def is_health_like(self, pid: str) -> bool:
+        return self.personnel.get(pid, {}).get("personel_turu") in ("saglikci", "saglikci_surucu")
+
+    def mandatory_target_hours(self, pid: str) -> int:
+        p = self.personnel.get(pid, {})
+        return max(0, int(self.targets.get(pid, p.get("hedef_saat", 0) or 0)))
+
+    def remaining_mandatory_hours(self, pid: str) -> int:
+        return max(0, self.mandatory_target_hours(pid) - self.hours.get(pid, 0))
+
+    def projected_hours(self, pid: str, task: str) -> int:
+        return self.hours.get(pid, 0) + int(TASKS[task]["hours"])
+
+    def assignment_creates_overtime(self, pid: str, task: str) -> bool:
+        return self.projected_hours(pid, task) > self.mandatory_target_hours(pid)
+
+    def overtime_period_count(self, pid: str, d: date) -> int:
+        return self.overtime_half1_count.get(pid, 0) if d.day <= 15 else self.overtime_half2_count.get(pid, 0)
 
     # ---------- hard constraint checks ----------
     def can_assign(self, pid: str, d: date, task: str, max_gun_asiri: int = 3) -> Tuple[bool, str]:
@@ -291,11 +313,6 @@ class SchedulerContext:
             if consec >= 3:
                 return False, "Sürücü 3 günden fazla üst üste çalışamaz"
 
-        # 6) fazla mesai: seçilmeyen personel normal hedefin üzerine çıkamaz
-        if pid in self.targets and not p.get("fazla_mesai", False):
-            if self.hours[pid] + int(TASKS[task]["hours"]) > self.targets[pid]:
-                return False, "Normal çalışma hedefi doldu (fazla mesai seçili değil)"
-
         return True, ""
 
     def assign(self, pid: str, d: date, task: str, count_stats: bool = True):
@@ -316,6 +333,12 @@ class SchedulerContext:
         hrs = int(TASKS[task]["hours"])
         self.hours[pid] += hrs
         self.total_shifts[pid] += 1
+        if self.is_health_like(pid) and self.hours[pid] > self.mandatory_target_hours(pid):
+            self.overtime_shift_count[pid] += 1
+            if d.day <= 15:
+                self.overtime_half1_count[pid] += 1
+            else:
+                self.overtime_half2_count[pid] += 1
         if d.weekday() == 5:
             self.saturday[pid] += 1
             self.weekend_shifts[pid] += 1
@@ -401,6 +424,27 @@ def _pick_best(ctx: SchedulerContext, candidates: List[str], d: date, task: str,
     urgent = [pid for pid in valid if ctx.requires_gap_assignment_today(pid, d)]
     if urgent:
         valid = urgent
+
+    # Sağlıkçı görevleri için zorunlu saat + fazla mesai tercih adaleti.
+    if task == "saglikci_24":
+        health_valid = [pid for pid in valid if ctx.is_health_like(pid)]
+        if health_valid:
+            mandatory_due = [pid for pid in health_valid if ctx.remaining_mandatory_hours(pid) > 0]
+            if mandatory_due:
+                max_remaining = max(ctx.remaining_mandatory_hours(pid) for pid in mandatory_due)
+                valid = [pid for pid in mandatory_due if ctx.remaining_mandatory_hours(pid) == max_remaining]
+            else:
+                overtime_candidates = [pid for pid in health_valid if ctx.assignment_creates_overtime(pid, task)]
+                wanting = [pid for pid in overtime_candidates if ctx.personnel[pid].get("fazla_mesai", False)]
+                if wanting:
+                    min_ot = min(ctx.overtime_shift_count[pid] for pid in wanting)
+                    wanting = [pid for pid in wanting if ctx.overtime_shift_count[pid] == min_ot]
+                    min_period_ot = min(ctx.overtime_period_count(pid, d) for pid in wanting)
+                    valid = [pid for pid in wanting if ctx.overtime_period_count(pid, d) == min_period_ot]
+                elif overtime_candidates:
+                    # Fazla mesai istemeyen personele yalnızca son çarede yaz.
+                    min_ot = min(ctx.overtime_shift_count[pid] for pid in overtime_candidates)
+                    valid = [pid for pid in overtime_candidates if ctx.overtime_shift_count[pid] == min_ot]
 
     valid.sort(key=lambda pid: ctx.score_candidate(pid, d, task))
     return valid[0]
@@ -546,6 +590,18 @@ def generate_schedule(
 
     errors.extend(_build_unmet_driver_minimum_messages(ctx, mandatory_driver_minimums))
 
+    for pid, p in ctx.personnel.items():
+        if not ctx.is_health_like(pid):
+            continue
+        target_hours = ctx.mandatory_target_hours(pid)
+        if target_hours <= 0:
+            continue
+        actual_hours = ctx.hours.get(pid, 0)
+        if actual_hours < target_hours:
+            errors.append(
+                f"{p.get('ad_soyad', pid)}'in zorunlu mesai saati tamamlanamadı ({actual_hours}/{target_hours} saat)"
+            )
+
     schedule.ihlaller = errors[:]
     return schedule, errors
 
@@ -666,5 +722,20 @@ def compute_violations(
                             f"zorunlu sürücü nöbeti tamamlanamadı ({actual}/{required})"
                         ),
                     })
+
+        for pid, p in ctx_all.personnel.items():
+            if not ctx_all.is_health_like(pid):
+                continue
+            target_hours = ctx_all.mandatory_target_hours(pid)
+            if target_hours <= 0:
+                continue
+            actual_hours = ctx_all.hours.get(pid, 0)
+            if actual_hours < target_hours:
+                out.append({
+                    "tarih": f"{yil:04d}-{ay:02d}-01",
+                    "slot": f"zorunlu_mesai_{pid}",
+                    "tur": "hard",
+                    "mesaj": f"{p.get('ad_soyad', pid)}'in zorunlu mesai saati tamamlanamadı ({actual_hours}/{target_hours} saat)",
+                })
 
     return out

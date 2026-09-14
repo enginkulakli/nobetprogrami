@@ -36,12 +36,21 @@ export default function Schedule() {
   const [conflictOpen, setConflictOpen] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const [tplId, setTplId] = useState("");
+  const [selectedPersonId, setSelectedPersonId] = useState("__none__");
   const [violations, setViolations] = useState({});
   const [cardOpen, setCardOpen] = useState(false);
   const [candidates, setCandidates] = useState(null);
   const { templates } = useTemplates();
 
   const pmap = useMemo(() => Object.fromEntries(personnel.map((p) => [p.id, p])), [personnel]);
+  const selectedPid = selectedPersonId === "__none__" ? null : selectedPersonId;
+  const selectablePersonnel = useMemo(() => {
+    if (!schedule?.assignments) return [];
+    const ids = new Set(schedule.assignments.map((a) => a.personel_id));
+    return personnel
+      .filter((p) => ids.has(p.id))
+      .sort((a, b) => a.ad_soyad.localeCompare(b.ad_soyad, "tr"));
+  }, [personnel, schedule]);
 
   const loadPersonnel = () => api.get("/personnel").then((r) => setPersonnel(r.data));
   useEffect(() => { loadPersonnel(); }, []);
@@ -67,6 +76,11 @@ export default function Schedule() {
     }
   };
   useEffect(() => { loadSchedule(); }, [yil, ay]);
+  useEffect(() => {
+    if (selectedPid && !selectablePersonnel.some((p) => p.id === selectedPid)) {
+      setSelectedPersonId("__none__");
+    }
+  }, [selectedPid, selectablePersonnel]);
 
   const generate = async (extra = {}) => {
     setLoading(true);
@@ -193,6 +207,22 @@ export default function Schedule() {
               </div>
             </div>
           )}
+          {schedule && (
+            <div>
+              <div className="text-xs font-semibold text-muted-foreground mb-1">Kişi Seç</div>
+              <Select value={selectedPersonId} onValueChange={setSelectedPersonId}>
+                <SelectTrigger className="w-52" data-testid="schedule-person-select-trigger">
+                  <SelectValue placeholder="Kişi seç" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">Tümünü Göster (Vurgu Yok)</SelectItem>
+                  {selectablePersonnel.map((p) => (
+                    <SelectItem key={p.id} value={p.id}>{p.ad_soyad}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
           <Button onClick={() => generate()} disabled={loading} data-testid="generate-btn">
             <Sparkles className="w-4 h-4 mr-2" /> {loading ? "Oluşturuluyor..." : "Oluştur"}
           </Button>
@@ -288,7 +318,9 @@ export default function Schedule() {
                           <SlotCell
                             key={s.key}
                             slot={s}
+                            personId={day[s.key]}
                             personName={pmap[day[s.key]]?.ad_soyad}
+                            selectedPersonId={selectedPid}
                             violation={violations[`${day.tarih}|${s.key}`]}
                             has24Driver={!!day.surucu_24}
                             onEdit={() => openEdit(day.tarih, s.key, day[s.key])}
@@ -405,7 +437,12 @@ function ViolationBadge({ violation, tarih, slot, onSwap }) {
   );
 }
 
-function SlotCell({ slot, personName, has24Driver, onEdit, onSwap, violation }) {
+function SlotCell({ slot, personId, personName, selectedPersonId, has24Driver, onEdit, onSwap, violation }) {
+  const isSelectedPerson = !!selectedPersonId && personId === selectedPersonId;
+  const cellTone = isSelectedPerson
+    ? "bg-red-600 text-white"
+    : (violation ? (violation.tur === "hard" ? "bg-red-50/60" : "bg-amber-50/60") : "");
+
   // hide 12h driver slots when 24h driver is set
   if (has24Driver && (slot.key === "surucu_gunduz" || slot.key === "surucu_gece")) {
     return <TableCell className="text-muted-foreground text-xs italic">— 24s aktif —</TableCell>;
@@ -413,21 +450,21 @@ function SlotCell({ slot, personName, has24Driver, onEdit, onSwap, violation }) 
   // hide 24h driver cell when not set and 12h drivers exist
   if (!has24Driver && slot.key === "surucu_24") {
     return (
-      <TableCell>
-        <button onClick={onEdit} className="text-xs text-muted-foreground hover:text-primary underline underline-offset-2">
+      <TableCell className={cellTone}>
+        <button onClick={onEdit} className={`text-xs underline underline-offset-2 ${isSelectedPerson ? "text-white" : "text-muted-foreground hover:text-primary"}`}>
           — atama yok —
         </button>
       </TableCell>
     );
   }
   return (
-    <TableCell className={violation ? (violation.tur === "hard" ? "bg-red-50/60" : "bg-amber-50/60") : ""}>
+    <TableCell className={cellTone} data-selected-person={isSelectedPerson ? "true" : "false"}>
       <button
         onClick={onEdit}
-        className="group inline-flex items-center gap-1.5 text-sm hover:text-primary mr-1.5"
+        className={`group inline-flex items-center gap-1.5 text-sm mr-1.5 ${isSelectedPerson ? "text-white hover:text-white" : "hover:text-primary"}`}
       >
-        <span>{personName || <span className="text-muted-foreground italic">Boş</span>}</span>
-        <Pencil className="w-3 h-3 opacity-0 group-hover:opacity-100" />
+        <span>{personName || <span className={isSelectedPerson ? "italic text-white/90" : "text-muted-foreground italic"}>Boş</span>}</span>
+        <Pencil className={`w-3 h-3 opacity-0 group-hover:opacity-100 ${isSelectedPerson ? "text-white" : ""}`} />
       </button>
       <ViolationBadge violation={violation} tarih={violation?.tarih} slot={slot.key} onSwap={onSwap} />
     </TableCell>
