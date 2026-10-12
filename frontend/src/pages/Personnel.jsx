@@ -12,7 +12,7 @@ import { Trash2, Pencil, UserPlus, Clock } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
 
-const emptyForm = { ad_soyad: "", personel_turu: "paramedik", aktif: true, hedef_saat: 180, aciklama: "", fazla_mesai: false, surucu_tercihi: "yok" };
+const emptyForm = { ad_soyad: "", personel_turu: "paramedik", aktif: true, hedef_saat: 180, aciklama: "", fazla_mesai: false, surucu_tercihi: "yok", surucu_yapabilir: false };
 const TERCIH_LABELS = { "12": "12s sürücü", "24": "24s sürücü", "24_saat_surucu": "24 Saat Sürücü", yok: "Tercih yok" };
 
 export default function Personnel() {
@@ -30,7 +30,7 @@ export default function Personnel() {
   const openNew = () => { setForm(emptyForm); setEditingId(null); setOpen(true); };
   const openEdit = (p) => {
     setForm({ ad_soyad: p.ad_soyad, personel_turu: p.personel_turu, aktif: p.aktif, hedef_saat: p.hedef_saat, aciklama: p.aciklama || "",
-      fazla_mesai: !!p.fazla_mesai, surucu_tercihi: p.surucu_tercihi || "yok" });
+      fazla_mesai: !!p.fazla_mesai, surucu_tercihi: p.surucu_tercihi || "yok", surucu_yapabilir: !!p.surucu_yapabilir });
     setEditingId(p.id);
     setOpen(true);
   };
@@ -127,7 +127,7 @@ export default function Personnel() {
                         {PERSONNEL_LABELS[p.personel_turu]}
                       </span>
                     </TableCell>
-                    <TableCell className="text-xs">{p.personel_turu === "surucu" ? TERCIH_LABELS[p.surucu_tercihi || "yok"] : <span className="text-muted-foreground">—</span>}</TableCell>
+                    <TableCell className="text-xs">{p.personel_turu === "surucu" || p.surucu_yapabilir ? TERCIH_LABELS[p.surucu_tercihi || "yok"] : <span className="text-muted-foreground">—</span>}</TableCell>
                     <TableCell>{p.fazla_mesai ? <span className="text-xs font-semibold text-amber-700">Evet</span> : <span className="text-xs text-muted-foreground">Hayır</span>}</TableCell>
                     <TableCell>
                       {p.aktif
@@ -172,7 +172,20 @@ export default function Personnel() {
                 </SelectContent>
               </Select>
             </div>
-            {form.personel_turu === "surucu" && (
+            {["paramedik", "att"].includes(form.personel_turu) && (
+              <div className="flex items-center justify-between rounded-md border p-3">
+                <div>
+                  <Label>Sürücü Nöbeti Tutabilir</Label>
+                  <p className="text-xs text-muted-foreground">Açıksa bu personel 12 veya 24 saatlik sürücü nöbetine atanabilir.</p>
+                </div>
+                <Switch
+                  checked={!!form.surucu_yapabilir}
+                  onCheckedChange={(v) => setForm({ ...form, surucu_yapabilir: v, surucu_tercihi: v ? form.surucu_tercihi : "yok" })}
+                  data-testid="switch-surucu-yapabilir"
+                />
+              </div>
+            )}
+            {(form.personel_turu === "surucu" || form.surucu_yapabilir) && (
               <div>
                 <Label>Sürücü Nöbet Tercihi</Label>
                 <Select value={form.surucu_tercihi} onValueChange={(v) => setForm({ ...form, surucu_tercihi: v })}>
@@ -184,7 +197,7 @@ export default function Personnel() {
                     <SelectItem value="yok">Tercihim yok</SelectItem>
                   </SelectContent>
                 </Select>
-                <p className="text-xs text-muted-foreground mt-1">24 saatlik sürücü atanırsa aynı gün ayrıca 12 saatlik sürücü atanmaz.</p>
+                <p className="text-xs text-muted-foreground mt-1">Tercih, algoritmanın 12 saatlik veya 24 saatlik sürücü görevini dağıtırken kullandığı önceliktir. 24 saatlik sürücü atanırsa aynı gün ayrıca 12 saatlik sürücü atanmaz.</p>
               </div>
             )}
             <div className="flex items-center justify-between">
