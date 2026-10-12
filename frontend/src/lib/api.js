@@ -94,9 +94,11 @@ export async function downloadFile(path, filename) {
 }
 
 export const PERSONNEL_LABELS = {
-  saglikci: "Sağlıkçı",
+  paramedik: "Paramedik",
+  att: "ATT",
   surucu: "Sürücü",
-  saglikci_surucu: "Sağlıkçı + Sürücü",
+  saglikci: "Eski sağlıkçı türü (düzenle)",
+  saglikci_surucu: "Eski karma tür (düzenle)",
 };
 
 export const TASK_LABELS = {
