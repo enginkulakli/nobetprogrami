@@ -33,6 +33,14 @@ def _is_24h_driver_preference(pref: str) -> bool:
     return pref in ("24", "24_saat_surucu")
 
 
+def _is_driver_eligible(person: dict) -> bool:
+    """Sürücü rolü veya sürücü yetkisi açılmış paramedik/ATT."""
+    tur = person.get("personel_turu")
+    return tur in ("surucu", "saglikci_surucu") or (
+        tur in ("paramedik", "att") and bool(person.get("surucu_yapabilir", False))
+    )
+
+
 DRIVER_TASKS = {"surucu_gunduz", "surucu_gece", "surucu_24"}
 PERIOD_LABELS = {1: "1-15", 2: "16-son"}
 
@@ -250,12 +258,9 @@ class SchedulerContext:
         if task == "saglikci_24":
             if turu not in ("paramedik", "att", "saglikci", "saglikci_surucu"):
                 return False, "Personel sağlıkçı görevine uygun değil"
-        elif task in ("surucu_gunduz", "surucu_gece"):
-            if turu not in ("surucu", "saglikci_surucu"):
+        elif task in ("surucu_gunduz", "surucu_gece", "surucu_24"):
+            if not _is_driver_eligible(p):
                 return False, "Personel sürücü görevine uygun değil"
-        elif task == "surucu_24":
-            if turu not in ("surucu", "saglikci_surucu"):
-                return False, "24 saatlik sürücü görevi yalnızca sürücü personeline verilebilir"
 
         # 2) yıllık izin (hard)
         date_iso = d.isoformat()
@@ -495,8 +500,9 @@ def generate_schedule(
         surucu_24_ids = [pid for pid in legacy_health_ids
                          if ctx.personnel[pid]["personel_turu"] == "saglikci_surucu"]
     else:
-        surucu_12_ids = surucu_ids
-        surucu_24_ids = list(surucu_ids)
+        # Paramedik/ATT yalnızca profillerinde sürücü yetkisi açıldıysa sürücü havuzuna girer.
+        surucu_12_ids = [pid for pid, p in ctx.personnel.items() if _is_driver_eligible(p)]
+        surucu_24_ids = list(surucu_12_ids)
 
     if not paramedik_ids:
         errors.append("Paramedik sayısı yetersiz (en az 1 aktif paramedik gerekli)")
