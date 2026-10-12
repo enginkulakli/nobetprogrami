@@ -29,7 +29,7 @@ export default function Personnel() {
 
   const openNew = () => { setForm(emptyForm); setEditingId(null); setOpen(true); };
   const openEdit = (p) => {
-    setForm({ ad_soyad: p.ad_soyad, personel_turu: ["paramedik", "att", "surucu"].includes(p.personel_turu) ? p.personel_turu : "paramedik", aktif: p.aktif, hedef_saat: p.hedef_saat, aciklama: p.aciklama || "",
+    setForm({ ad_soyad: p.ad_soyad, personel_turu: p.personel_turu, aktif: p.aktif, hedef_saat: p.hedef_saat, aciklama: p.aciklama || "",
       fazla_mesai: !!p.fazla_mesai, surucu_tercihi: p.surucu_tercihi || "yok" });
     setEditingId(p.id);
     setOpen(true);
@@ -165,6 +165,7 @@ export default function Personnel() {
               <Select value={form.personel_turu} onValueChange={(v) => setForm({ ...form, personel_turu: v })}>
                 <SelectTrigger data-testid="select-personel-turu"><SelectValue /></SelectTrigger>
                 <SelectContent>
+                  {![ "paramedik", "att", "surucu" ].includes(form.personel_turu) && <SelectItem value={form.personel_turu} disabled>Eski tür: {PERSONNEL_LABELS[form.personel_turu] || form.personel_turu} (yeni tür seçin)</SelectItem>}
                   <SelectItem value="paramedik">Paramedik</SelectItem>
                   <SelectItem value="att">ATT</SelectItem>
                   <SelectItem value="surucu">Sürücü</SelectItem>
