@@ -85,7 +85,7 @@ async def find_conflicts(errors: List[str], ignored: List[str], pmap: dict, ista
 
 def fmt_task_label(task: str) -> str:
     return {
-        "saglikci_24": "Sağlıkçı 24s",
+        "saglikci_24": "24s Sağlık Nöbeti",
         "surucu_gunduz": "Sürücü 09-21",
         "surucu_gece": "Sürücü 21-09",
         "surucu_24": "Sürücü 24s",

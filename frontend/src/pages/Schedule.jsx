@@ -15,8 +15,8 @@ import { CarryoverCard } from "@/components/schedule/CarryoverCard";
 import { useTemplates, applyTemplate } from "@/components/TemplatesCard";
 
 const SLOTS = [
-  { key: "saglikci_1", label: "Sağlıkçı 1", role: "saglikci" },
-  { key: "saglikci_2", label: "Sağlıkçı 2", role: "saglikci" },
+  { key: "saglikci_1", label: "Paramedik", role: "paramedik" },
+  { key: "saglikci_2", label: "ATT", role: "att" },
   { key: "surucu_gunduz", label: "Sürücü 09-21", role: "surucu" },
   { key: "surucu_gece", label: "Sürücü 21-09", role: "surucu" },
   { key: "surucu_24", label: "24s Sürücü", role: "surucu_24" },

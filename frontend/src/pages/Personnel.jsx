@@ -12,7 +12,7 @@ import { Trash2, Pencil, UserPlus, Clock } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
 
-const emptyForm = { ad_soyad: "", personel_turu: "saglikci", aktif: true, hedef_saat: 180, aciklama: "", fazla_mesai: false, surucu_tercihi: "yok" };
+const emptyForm = { ad_soyad: "", personel_turu: "paramedik", aktif: true, hedef_saat: 180, aciklama: "", fazla_mesai: false, surucu_tercihi: "yok" };
 const TERCIH_LABELS = { "12": "12s sürücü", "24": "24s sürücü", "24_saat_surucu": "24 Saat Sürücü", yok: "Tercih yok" };
 
 export default function Personnel() {
@@ -127,7 +127,7 @@ export default function Personnel() {
                         {PERSONNEL_LABELS[p.personel_turu]}
                       </span>
                     </TableCell>
-                    <TableCell className="text-xs">{p.personel_turu === "saglikci_surucu" ? TERCIH_LABELS[p.surucu_tercihi || "yok"] : <span className="text-muted-foreground">—</span>}</TableCell>
+                    <TableCell className="text-xs">{p.personel_turu === "surucu" ? TERCIH_LABELS[p.surucu_tercihi || "yok"] : <span className="text-muted-foreground">—</span>}</TableCell>
                     <TableCell>{p.fazla_mesai ? <span className="text-xs font-semibold text-amber-700">Evet</span> : <span className="text-xs text-muted-foreground">Hayır</span>}</TableCell>
                     <TableCell>
                       {p.aktif
@@ -165,13 +165,14 @@ export default function Personnel() {
               <Select value={form.personel_turu} onValueChange={(v) => setForm({ ...form, personel_turu: v })}>
                 <SelectTrigger data-testid="select-personel-turu"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="saglikci">Sağlıkçı</SelectItem>
+                  {![ "paramedik", "att", "surucu" ].includes(form.personel_turu) && <SelectItem value={form.personel_turu} disabled>Eski tür: {PERSONNEL_LABELS[form.personel_turu] || form.personel_turu} (yeni tür seçin)</SelectItem>}
+                  <SelectItem value="paramedik">Paramedik</SelectItem>
+                  <SelectItem value="att">ATT</SelectItem>
                   <SelectItem value="surucu">Sürücü</SelectItem>
-                  <SelectItem value="saglikci_surucu">Sağlıkçı + Sürücü</SelectItem>
                 </SelectContent>
               </Select>
             </div>
-            {form.personel_turu === "saglikci_surucu" && (
+            {form.personel_turu === "surucu" && (
               <div>
                 <Label>Sürücü Nöbet Tercihi</Label>
                 <Select value={form.surucu_tercihi} onValueChange={(v) => setForm({ ...form, surucu_tercihi: v })}>
@@ -183,7 +184,7 @@ export default function Personnel() {
                     <SelectItem value="yok">Tercihim yok</SelectItem>
                   </SelectContent>
                 </Select>
-                <p className="text-xs text-muted-foreground mt-1">24s sürücü nöbetinde ayrıca 12s sürücü atanmaz (2 sağlıkçı + 1×24s sürücü).</p>
+                <p className="text-xs text-muted-foreground mt-1">24 saatlik sürücü atanırsa aynı gün ayrıca 12 saatlik sürücü atanmaz.</p>
               </div>
             )}
             <div className="flex items-center justify-between">

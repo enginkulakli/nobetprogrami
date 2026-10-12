@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field, ConfigDict
 import uuid
 
 
-PersonnelType = Literal["saglikci", "surucu", "saglikci_surucu"]
+PersonnelType = Literal["paramedik", "att", "surucu", "saglikci", "saglikci_surucu"]
 LeaveStatus = Literal["yillik_izin", "nobet_istemiyor"]
 TaskKind = Literal["saglikci_24", "surucu_gunduz", "surucu_gece", "surucu_24"]
 SurucuTercihi = Literal["12", "24", "24_saat_surucu", "yok"]
