@@ -102,7 +102,7 @@ export const PERSONNEL_LABELS = {
 };
 
 export const TASK_LABELS = {
-  saglikci_24: "Sağlıkçı 24s",
+  saglikci_24: "24s Sağlık Nöbeti",
   surucu_gunduz: "Sürücü 09-21",
   surucu_gece: "Sürücü 21-09",
   surucu_24: "24s Sürücü",
