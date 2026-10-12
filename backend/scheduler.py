@@ -197,7 +197,7 @@ class SchedulerContext:
 
     def _is_gap_constrained(self, pid: str) -> bool:
         tur = self.personnel.get(pid, {}).get("personel_turu")
-        return tur in ("saglikci", "saglikci_surucu")
+        return tur in ("paramedik", "att", "saglikci", "saglikci_surucu")
 
     def _last_assignment_date(self, pid: str, before: Optional[date] = None) -> Optional[date]:
         entries = self.pid_assignments.get(pid, [])
@@ -221,7 +221,7 @@ class SchedulerContext:
         return gap >= self.saglikci_max_nobet_araligi
 
     def is_health_like(self, pid: str) -> bool:
-        return self.personnel.get(pid, {}).get("personel_turu") in ("saglikci", "saglikci_surucu")
+        return self.personnel.get(pid, {}).get("personel_turu") in ("paramedik", "att", "saglikci", "saglikci_surucu")
 
     def mandatory_target_hours(self, pid: str) -> int:
         p = self.personnel.get(pid, {})
@@ -248,14 +248,14 @@ class SchedulerContext:
 
         # 1) role compatibility
         if task == "saglikci_24":
-            if turu not in ("saglikci", "saglikci_surucu"):
+            if turu not in ("paramedik", "att", "saglikci", "saglikci_surucu"):
                 return False, "Personel sağlıkçı görevine uygun değil"
         elif task in ("surucu_gunduz", "surucu_gece"):
-            if turu not in ("surucu", "saglikci_surucu"):
+            if turu != "surucu":
                 return False, "Personel sürücü görevine uygun değil"
         elif task == "surucu_24":
-            if turu != "saglikci_surucu":
-                return False, "24 saatlik sürücü yalnızca Sağlıkçı+Sürücü olabilir"
+            if turu != "surucu":
+                return False, "24 saatlik sürücü görevi yalnızca sürücü personeline verilebilir"
 
         # 2) yıllık izin (hard)
         date_iso = d.isoformat()
@@ -479,15 +479,15 @@ def generate_schedule(
     mandatory_driver_minimums = _build_mandatory_driver_minimums(personnel)
 
     # pre-compute candidate pools
-    saglikci_ids = [pid for pid, p in ctx.personnel.items()
-                    if p["personel_turu"] in ("saglikci", "saglikci_surucu")]
-    surucu_12_ids = [pid for pid, p in ctx.personnel.items()
-                     if p["personel_turu"] in ("surucu", "saglikci_surucu")]
-    surucu_24_ids = [pid for pid, p in ctx.personnel.items()
-                     if p["personel_turu"] == "saglikci_surucu"]
+    paramedik_ids = [pid for pid, p in ctx.personnel.items() if p["personel_turu"] == "paramedik"]
+    att_ids = [pid for pid, p in ctx.personnel.items() if p["personel_turu"] == "att"]
+    surucu_12_ids = [pid for pid, p in ctx.personnel.items() if p["personel_turu"] == "surucu"]
+    surucu_24_ids = list(surucu_12_ids)
 
-    if len(saglikci_ids) < 2:
-        errors.append("Sağlıkçı sayısı yetersiz (en az 2 aktif sağlıkçı gerekli)")
+    if not paramedik_ids:
+        errors.append("Paramedik sayısı yetersiz (en az 1 aktif paramedik gerekli)")
+    if not att_ids:
+        errors.append("ATT sayısı yetersiz (en az 1 aktif ATT gerekli)")
     if not surucu_12_ids:
         errors.append("Sürücü sayısı yetersiz (hiç aktif sürücü yok)")
 
@@ -497,10 +497,10 @@ def generate_schedule(
     for d in days:
         day = ShiftDay(tarih=d.isoformat())
 
-        # Step 1: 2 sağlıkçı ata
-        s1 = _pick_best(ctx, saglikci_ids, d, "saglikci_24", max_gun_asiri)
+        # Step 1: bir paramedik ve bir ATT ata
+        s1 = _pick_best(ctx, paramedik_ids, d, "saglikci_24", max_gun_asiri)
         if s1 is None:
-            errors.append(f"{d.isoformat()}: Sağlıkçı 1 atanamadı")
+            errors.append(f"{d.isoformat()}: Paramedik atanamadı")
         else:
             ctx.assign(s1, d, "saglikci_24")
             day.saglikci_1 = s1
@@ -508,10 +508,10 @@ def generate_schedule(
                 tarih=d.isoformat(), personel_id=s1, gorev="saglikci_24",
                 baslangic="08:00", bitis="08:00", saat=24))
 
-        s2_pool = [p for p in saglikci_ids if p != s1]
+        s2_pool = [p for p in att_ids if p != s1]
         s2 = _pick_best(ctx, s2_pool, d, "saglikci_24", max_gun_asiri)
         if s2 is None:
-            errors.append(f"{d.isoformat()}: Sağlıkçı 2 atanamadı")
+            errors.append(f"{d.isoformat()}: ATT atanamadı")
         else:
             ctx.assign(s2, d, "saglikci_24")
             day.saglikci_2 = s2
@@ -575,7 +575,7 @@ def generate_schedule(
 
     # Step 3: Sağlıkçı ve Sağlıkçı+Sürücü için maksimum nöbet aralığı kontrolü
     for pid, p in ctx.personnel.items():
-        if p.get("personel_turu") not in ("saglikci", "saglikci_surucu"):
+        if p.get("personel_turu") not in ("paramedik", "att", "saglikci", "saglikci_surucu"):
             continue
         assigned_dates = sorted({dd for (dd, _t, _s, _e) in ctx.pid_assignments.get(pid, [])})
         if len(assigned_dates) < 2:
