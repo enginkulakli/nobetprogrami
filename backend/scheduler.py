@@ -251,10 +251,10 @@ class SchedulerContext:
             if turu not in ("paramedik", "att", "saglikci", "saglikci_surucu"):
                 return False, "Personel sağlıkçı görevine uygun değil"
         elif task in ("surucu_gunduz", "surucu_gece"):
-            if turu != "surucu":
+            if turu not in ("surucu", "saglikci_surucu"):
                 return False, "Personel sürücü görevine uygun değil"
         elif task == "surucu_24":
-            if turu != "surucu":
+            if turu not in ("surucu", "saglikci_surucu"):
                 return False, "24 saatlik sürücü görevi yalnızca sürücü personeline verilebilir"
 
         # 2) yıllık izin (hard)
@@ -481,8 +481,22 @@ def generate_schedule(
     # pre-compute candidate pools
     paramedik_ids = [pid for pid, p in ctx.personnel.items() if p["personel_turu"] == "paramedik"]
     att_ids = [pid for pid, p in ctx.personnel.items() if p["personel_turu"] == "att"]
-    surucu_12_ids = [pid for pid, p in ctx.personnel.items() if p["personel_turu"] == "surucu"]
-    surucu_24_ids = list(surucu_12_ids)
+    surucu_ids = [pid for pid, p in ctx.personnel.items() if p["personel_turu"] == "surucu"]
+    legacy_health_ids = [pid for pid, p in ctx.personnel.items()
+                         if p["personel_turu"] in ("saglikci", "saglikci_surucu")]
+    legacy_mode = not paramedik_ids and not att_ids and bool(legacy_health_ids)
+
+    # Eski kayıtlar, personel türleri yeni sınıflara taşınana kadar önceki algoritmayla çalışabilir.
+    if legacy_mode:
+        paramedik_ids = list(legacy_health_ids)
+        att_ids = list(legacy_health_ids)
+        surucu_12_ids = surucu_ids + [pid for pid in legacy_health_ids
+                                      if ctx.personnel[pid]["personel_turu"] == "saglikci_surucu"]
+        surucu_24_ids = [pid for pid in legacy_health_ids
+                         if ctx.personnel[pid]["personel_turu"] == "saglikci_surucu"]
+    else:
+        surucu_12_ids = surucu_ids
+        surucu_24_ids = list(surucu_ids)
 
     if not paramedik_ids:
         errors.append("Paramedik sayısı yetersiz (en az 1 aktif paramedik gerekli)")
