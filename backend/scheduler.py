@@ -415,7 +415,7 @@ class SchedulerContext:
             if gap_days is not None:
                 score -= min(gap_days, self.saglikci_max_nobet_araligi + 2) * 6.0
         # tiebreaker: rastgele küçük
-        score += random.random() * 0.01
+        score += random.random() * 2.0  # çoklu aylık plan denemelerinde eşit adayları çeşitlendirir
         return score
 
 
@@ -483,7 +483,7 @@ def _pick_best(ctx: SchedulerContext, candidates: List[str], d: date, task: str,
     return valid[0]
 
 
-def generate_schedule(
+def _generate_schedule_once(
     yil: int,
     ay: int,
     personnel: List[dict],
@@ -652,6 +652,102 @@ def generate_schedule(
 
     schedule.ihlaller = errors[:]
     return schedule, errors
+
+
+def _monthly_plan_quality(schedule: MonthlySchedule, errors: List[str], personnel: List[dict],
+                          leaves: Dict[str, Dict[str, str]], targets: Optional[Dict[str, int]],
+                          saglikci_max_nobet_araligi: int) -> float:
+    """Tam ay planını, yalnızca tek bir günlük seçim puanına göre değil, sonuçlarına göre puanlar."""
+    score = 0.0
+    slots = ("saglikci_1", "saglikci_2", "surucu_gunduz", "surucu_gece", "surucu_24")
+    for day in schedule.gunler:
+        for slot in slots:
+            if not getattr(day, slot, None):
+                score += 10000.0
+
+    # Açık görev ve hard-rule/mesai ihlalleri, küçük denge iyileştirmelerinden çok daha önemlidir.
+    for err in errors:
+        if "tam gün boşluk var" in err:
+            score += 250.0
+        elif "tamamlanamadı" in err:
+            score += 180.0
+        else:
+            score += 1200.0
+
+    by_id = {p["id"]: p for p in personnel if p.get("aktif", True)}
+    hours = {pid: 0 for pid in by_id}
+    dates = {pid: [] for pid in by_id}
+    driver_counts = {pid: 0 for pid in by_id}
+    for assignment in schedule.assignments:
+        pid = assignment.personel_id
+        if pid not in by_id:
+            continue
+        hours[pid] += int(assignment.saat)
+        dates[pid].append(date.fromisoformat(assignment.tarih))
+        if assignment.gorev in DRIVER_TASKS:
+            driver_counts[pid] += 1
+        if leaves.get(pid, {}).get(assignment.tarih) == "nobet_istemiyor":
+            score += 100.0
+
+    # Zorunlu sağlıkçı saatleri tamamlanırken fazla mesaiyi ve sürücü görevlerini de dengeler.
+    for pid, p in by_id.items():
+        tur = p.get("personel_turu")
+        if tur in ("paramedik", "att", "saglikci", "saglikci_surucu"):
+            target = max(0, int((targets or {}).get(pid, p.get("hedef_saat", 0) or 0)))
+            if hours[pid] < target:
+                score += (target - hours[pid]) * 3.0
+            else:
+                score += (hours[pid] - target) * 0.8
+        assigned = sorted(set(dates[pid]))
+        if tur in ("paramedik", "att", "saglikci", "saglikci_surucu"):
+            for prev, cur in zip(assigned, assigned[1:]):
+                gap = (cur - prev).days - 1
+                if gap > saglikci_max_nobet_araligi:
+                    score += 250.0 * (gap - saglikci_max_nobet_araligi)
+    eligible_driver_ids = [
+        pid for pid, p in by_id.items()
+        if _is_driver_eligible(p)
+    ]
+    if eligible_driver_ids:
+        avg = sum(driver_counts[pid] for pid in eligible_driver_ids) / len(eligible_driver_ids)
+        score += sum((driver_counts[pid] - avg) ** 2 for pid in eligible_driver_ids) * 2.0
+    return score
+
+
+def generate_schedule(
+    yil: int,
+    ay: int,
+    personnel: List[dict],
+    leaves: Dict[str, Dict[str, str]],
+    max_gun_asiri: int = 3,
+    holidays: Optional[set] = None,
+    carryover_days: Optional[List[dict]] = None,
+    targets: Optional[Dict[str, int]] = None,
+    saglikci_max_nobet_araligi: int = 4,
+) -> Tuple[MonthlySchedule, List[str]]:
+    """Birden fazla tam aylık plan üretir, sonuçları denetler ve en iyi puanlı planı döndürür."""
+    best = None
+    best_score = float("inf")
+    # Sezgisel algoritma tek bir sıraya bağlı kalmasın. Birkaç alternatif ay planı
+    # üretip boş görevleri, tercih ihlallerini, uzun aralıkları ve dengesizliği karşılaştır.
+    for _attempt in range(16):
+        candidate, candidate_errors = _generate_schedule_once(
+            yil, ay, personnel, leaves, max_gun_asiri, holidays,
+            carryover_days, targets, saglikci_max_nobet_araligi,
+        )
+        quality = _monthly_plan_quality(
+            candidate, candidate_errors, personnel, leaves, targets,
+            saglikci_max_nobet_araligi,
+        )
+        if quality < best_score:
+            best = (candidate, candidate_errors)
+            best_score = quality
+        if quality == 0:
+            break
+    return best if best is not None else _generate_schedule_once(
+        yil, ay, personnel, leaves, max_gun_asiri, holidays,
+        carryover_days, targets, saglikci_max_nobet_araligi,
+    )
 
 
 def validate_manual_assignment(
