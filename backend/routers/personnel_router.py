@@ -1,4 +1,5 @@
 from typing import List, Optional
+import colorsys
 from fastapi import APIRouter, HTTPException, Depends
 
 from deps import db, current_station
@@ -23,7 +24,20 @@ async def seed_demo(istasyon_id: str = Depends(current_station)):
 
 @router.get("/personnel", response_model=List[Personnel])
 async def list_personnel(istasyon_id: str = Depends(current_station)):
-    return await db.personnel.find({"istasyon_id": istasyon_id}, {"_id": 0}).to_list(1000)
+    people = await db.personnel.find({"istasyon_id": istasyon_id}, {"_id": 0}).to_list(1000)
+    # Eski personel kayıtlarına da tek seferlik, kalıcı ve birbirinden ayrışan renk ata.
+    for index, person in enumerate(people):
+        color = person.get("renk")
+        if not isinstance(color, str) or len(color) != 7 or not color.startswith("#"):
+            hue = (index * 0.618033988749895) % 1.0
+            red, green, blue = colorsys.hsv_to_rgb(hue, 0.72, 0.72)
+            color = "#{:02X}{:02X}{:02X}".format(round(red * 255), round(green * 255), round(blue * 255))
+            await db.personnel.update_one(
+                {"id": person["id"], "istasyon_id": istasyon_id},
+                {"$set": {"renk": color}},
+            )
+            person["renk"] = color
+    return people
 
 
 @router.post("/personnel", response_model=Personnel)
