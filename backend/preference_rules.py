@@ -29,12 +29,10 @@ def _same_driver_streak(ctx, pid, task, d):
 
 
 def _preferred_candidates(ctx, candidates, d):
-    date_iso = d.isoformat()
-    wanted = [p for p in candidates if ctx.leaves.get(p, {}).get(date_iso) == "nobet_istiyor"]
-    if wanted:
-        return wanted
-    available = [p for p in candidates if ctx.leaves.get(p, {}).get(date_iso) != "nobet_istemiyor"]
-    return available or candidates
+    # Tercihler aday havuzunu daraltmamalı: aksi hâlde mesai hedefi olan
+    # uygun personel, başka biri tercih bildirdi diye hiç görev alamayabilir.
+    # score_candidate zaten "nöbet istemiyorum" tercihini puan cezasıyla uygular.
+    return list(candidates)
 
 
 def install_preference_rules() -> None:
