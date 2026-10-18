@@ -10,6 +10,7 @@ def _person(pid, role):
         "hedef_saat": 0,
         "fazla_mesai": False,
         "surucu_tercihi": "yok",
+        "surucu_yapabilir": role in ("paramedik", "att"),
         "nobet_hedef_1_15": None,
         "nobet_hedef_16_son": None,
     }
