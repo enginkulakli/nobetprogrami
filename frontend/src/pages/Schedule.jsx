@@ -87,22 +87,17 @@ export default function Schedule() {
     setErrors([]);
     try {
       const r = await api.post("/schedule/generate", { yil, ay, ...extra });
-      // Use the returned schedule immediately, then refresh from the saved record.
-      if (r.data?.schedule) setSchedule(r.data.schedule);
       setErrors(r.data?.errors || []);
       setConflicts(r.data?.conflicts || []);
       setHint(r.data?.ipucu || null);
       setRefreshKey((k) => k + 1);
+      // Render only the persisted GET response. The generation response can have a
+      // different shape and must not be passed directly into the table state.
+      await loadSchedule();
       try {
         await loadViolations();
       } catch {
         setViolations({});
-      }
-      // Confirm the persisted version without requiring the user to refresh the page.
-      try {
-        await loadSchedule();
-      } catch {
-        // Keep the schedule returned by the generation endpoint if this follow-up read fails.
       }
       if (r.data?.success) {
         setConflictOpen(false);
@@ -113,6 +108,8 @@ export default function Schedule() {
       }
     } catch (e) {
       toast.error("Oluşturulamadı: " + formatApiError(e));
+      // A failed refresh should not blank an already visible schedule.
+      try { await loadSchedule(); } catch {}
     } finally {
       setLoading(false);
     }
@@ -181,15 +178,6 @@ export default function Schedule() {
   return (
     <TooltipProvider delayDuration={150}>
     <div className="space-y-6" data-testid="schedule-page">
-      {loading && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-background/80 backdrop-blur-sm" role="status" aria-live="polite" data-testid="schedule-loading-overlay">
-          <div className="rounded-xl border bg-card px-8 py-6 text-center shadow-lg">
-            <Sparkles className="mx-auto mb-3 h-8 w-8 animate-pulse text-primary" />
-            <div className="font-semibold">Nöbet listesi oluşturuluyor…</div>
-            <div className="mt-1 text-sm text-muted-foreground">İşlem bitince liste otomatik yüklenecek.</div>
-          </div>
-        </div>
-      )}
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 no-print">
         <div>
           <div className="text-xs font-bold uppercase tracking-[0.2em] text-muted-foreground">Aylık Nöbet Planı</div>
