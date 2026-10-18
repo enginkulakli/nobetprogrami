@@ -84,24 +84,38 @@ export default function Schedule() {
 
   const generate = async (extra = {}) => {
     setLoading(true);
+    setErrors([]);
     try {
       const r = await api.post("/schedule/generate", { yil, ay, ...extra });
-      setSchedule(r.data.schedule);
-      setErrors(r.data.errors || []);
-      setConflicts(r.data.conflicts || []);
-      setHint(r.data.ipucu || null);
-      loadViolations();
+      // Use the returned schedule immediately, then refresh from the saved record.
+      if (r.data?.schedule) setSchedule(r.data.schedule);
+      setErrors(r.data?.errors || []);
+      setConflicts(r.data?.conflicts || []);
+      setHint(r.data?.ipucu || null);
       setRefreshKey((k) => k + 1);
-      if (r.data.success) {
+      try {
+        await loadViolations();
+      } catch {
+        setViolations({});
+      }
+      // Confirm the persisted version without requiring the user to refresh the page.
+      try {
+        await loadSchedule();
+      } catch {
+        // Keep the schedule returned by the generation endpoint if this follow-up read fails.
+      }
+      if (r.data?.success) {
         setConflictOpen(false);
         toast.success(r.data.ignored?.length ? `Liste oluşturuldu (${r.data.ignored.length} istek göz ardı edildi)` : "Nöbet listesi oluşturuldu");
       } else {
-        toast.warning(`${r.data.errors.length} sorun tespit edildi`);
+        toast.warning(`${(r.data?.errors || []).length} sorun tespit edildi`);
         setConflictOpen(true);
       }
     } catch (e) {
-      toast.error("Oluşturulamadı: " + (e.response?.data?.detail || e.message));
-    } finally { setLoading(false); }
+      toast.error("Oluşturulamadı: " + formatApiError(e));
+    } finally {
+      setLoading(false);
+    }
   };
 
   const doApplyTemplate = async () => {
@@ -167,6 +181,15 @@ export default function Schedule() {
   return (
     <TooltipProvider delayDuration={150}>
     <div className="space-y-6" data-testid="schedule-page">
+      {loading && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-background/80 backdrop-blur-sm" role="status" aria-live="polite" data-testid="schedule-loading-overlay">
+          <div className="rounded-xl border bg-card px-8 py-6 text-center shadow-lg">
+            <Sparkles className="mx-auto mb-3 h-8 w-8 animate-pulse text-primary" />
+            <div className="font-semibold">Nöbet listesi oluşturuluyor…</div>
+            <div className="mt-1 text-sm text-muted-foreground">İşlem bitince liste otomatik yüklenecek.</div>
+          </div>
+        </div>
+      )}
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 no-print">
         <div>
           <div className="text-xs font-bold uppercase tracking-[0.2em] text-muted-foreground">Aylık Nöbet Planı</div>
