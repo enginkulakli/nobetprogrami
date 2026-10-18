@@ -42,7 +42,7 @@ export function ConflictDialog({ open, onClose, conflicts, errors, onRegenerate,
                 <Checkbox checked={selected.includes(c.id)} onCheckedChange={() => toggle(c.id)} data-testid={`conflict-check-${c.id}`} />
                 <span className="font-mono text-xs w-28">{c.tarih} <span className="text-muted-foreground">{trDayShort(c.tarih)}</span></span>
                 <span className="flex-1 text-sm font-medium">{c.ad_soyad}</span>
-                <Badge variant="outline" className={DURUM[c.durum].cls}>{DURUM[c.durum].label}</Badge>
+                <Badge variant="outline" className={(DURUM[c.durum] || { cls: "bg-muted text-foreground border-border" }).cls}>{(DURUM[c.durum] || { label: c.durum || "İstek" }).label}</Badge>
               </label>
             ))}
           </div>
