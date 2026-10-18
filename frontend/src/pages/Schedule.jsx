@@ -67,8 +67,14 @@ export default function Schedule() {
     const r = await api.get(`/schedule/${yil}/${ay}`);
     if (r.data.exists) {
       setSchedule(r.data);
-      setErrors(r.data.ihlaller || []);
-      loadViolations();
+      // Eski kayıtlı ihlalleri sayfa açılışında tekrar üretim hatası gibi gösterme.
+      // Uyarılar yalnızca kullanıcı listeyi yeni oluşturduğunda gösterilir.
+      setErrors([]);
+      try {
+        await loadViolations();
+      } catch {
+        setViolations({});
+      }
     } else {
       setSchedule(null);
       setErrors([]);
@@ -84,6 +90,7 @@ export default function Schedule() {
 
   const generate = async (extra = {}) => {
     setLoading(true);
+    setConflictOpen(false);
     setErrors([]);
     try {
       const r = await api.post("/schedule/generate", { yil, ay, ...extra });
@@ -103,8 +110,10 @@ export default function Schedule() {
         setConflictOpen(false);
         toast.success(r.data.ignored?.length ? `Liste oluşturuldu (${r.data.ignored.length} istek göz ardı edildi)` : "Nöbet listesi oluşturuldu");
       } else {
+        // Eksik atamaları göster ama ilk anda listeyi kapatan modal açma.
+        // Ayrıntılı çakışma penceresi, kullanıcı uyarı kartından isteyince açılır.
         toast.warning(`${(r.data?.errors || []).length} sorun tespit edildi`);
-        setConflictOpen(true);
+        setConflictOpen(false);
       }
     } catch (e) {
       toast.error("Oluşturulamadı: " + formatApiError(e));
