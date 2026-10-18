@@ -141,8 +141,14 @@ async def manual_update(req: ManualUpdateRequest, istasyon_id: str = Depends(cur
     saglikci_gap = int(settings["saglikci_max_nobet_araligi"])
 
     if req.personel_id:
-        if not any(p["id"] == req.personel_id for p in personnel):
+        selected = next((p for p in personnel if p["id"] == req.personel_id), None)
+        if not selected:
             raise HTTPException(404, "Personel bulunamadı")
+        required_role = {"saglikci_1": "paramedik", "saglikci_2": "att",
+                         "surucu_gunduz": "surucu", "surucu_gece": "surucu",
+                         "surucu_24": "surucu"}[req.slot]
+        if selected.get("personel_turu") != required_role:
+            raise HTTPException(400, f"Bu görev için {required_role} türünde personel seçilmelidir")
         tinfo = await build_targets(req.yil, req.ay, personnel, leaves)
         targets = {k: t["normal_hedef"] for k, t in tinfo.items()}
         ok, msg = validate_manual_assignment(
@@ -246,9 +252,9 @@ async def slot_candidates(req: CandidatesRequest, istasyon_id: str = Depends(cur
     targets = {k: t["normal_hedef"] for k, t in tinfo.items()}
     settings = await _get_scheduler_settings(istasyon_id)
     saglikci_gap = int(settings["saglikci_max_nobet_araligi"])
-    roles = {"saglikci_1": ("saglikci", "saglikci_surucu"), "saglikci_2": ("saglikci", "saglikci_surucu"),
-             "surucu_gunduz": ("surucu", "saglikci_surucu"), "surucu_gece": ("surucu", "saglikci_surucu"),
-             "surucu_24": ("saglikci_surucu",)}[req.slot]
+    roles = {"saglikci_1": ("paramedik",), "saglikci_2": ("att",),
+             "surucu_gunduz": ("surucu",), "surucu_gece": ("surucu",),
+             "surucu_24": ("surucu",)}[req.slot]
     out = []
     for p in personnel:
         if not p.get("aktif", True) or p["personel_turu"] not in roles:
@@ -303,9 +309,9 @@ async def schedule_summary(yil: int, ay: int, istasyon_id: str = Depends(current
     empty = []
     for g in doc["gunler"]:
         if not g.get("saglikci_1"):
-            empty.append({"tarih": g["tarih"], "slot": "saglikci_1", "label": "Sağlıkçı 1"})
+            empty.append({"tarih": g["tarih"], "slot": "saglikci_1", "label": "Paramedik"})
         if not g.get("saglikci_2"):
-            empty.append({"tarih": g["tarih"], "slot": "saglikci_2", "label": "Sağlıkçı 2"})
+            empty.append({"tarih": g["tarih"], "slot": "saglikci_2", "label": "ATT"})
         if not g.get("surucu_24"):
             if not g.get("surucu_gunduz"):
                 empty.append({"tarih": g["tarih"], "slot": "surucu_gunduz", "label": "Sürücü 09-21"})

@@ -5,9 +5,8 @@ from typing import List, Optional, Literal
 from pydantic import BaseModel, Field, ConfigDict
 import uuid
 
-
-PersonnelType = Literal["saglikci", "surucu", "saglikci_surucu"]
-LeaveStatus = Literal["yillik_izin", "nobet_istemiyor"]
+PersonnelType = Literal["paramedik", "att", "surucu", "saglikci", "saglikci_surucu"]
+LeaveStatus = Literal["yillik_izin", "nobet_istemiyor", "nobet_istiyor"]
 TaskKind = Literal["saglikci_24", "surucu_gunduz", "surucu_gece", "surucu_24"]
 SurucuTercihi = Literal["12", "24", "24_saat_surucu", "yok"]
 UserRole = Literal["admin", "istasyon_sorumlusu"]
@@ -20,18 +19,14 @@ def now_iso() -> str:
 def new_id() -> str:
     return str(uuid.uuid4())
 
-
-# ---------------- Stations & Users (auth) ----------------
 class Station(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=new_id)
     ad: str
     created_at: str = Field(default_factory=now_iso)
 
-
 class StationCreate(BaseModel):
     ad: str
-
 
 class User(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -43,34 +38,27 @@ class User(BaseModel):
     sifre_degistirildi: bool = False
     created_at: str = Field(default_factory=now_iso)
 
-
 class UserCreate(BaseModel):
     kullanici_adi: str
     sifre: str
     istasyon_id: str
-
 
 class UserUpdate(BaseModel):
     kullanici_adi: Optional[str] = None
     sifre: Optional[str] = None
     istasyon_id: Optional[str] = None
 
-
 class LoginRequest(BaseModel):
     kullanici_adi: str
     sifre: str
-
 
 class ChangePasswordRequest(BaseModel):
     eski_sifre: str
     yeni_sifre: str
 
-
 class AssignOrphansRequest(BaseModel):
     istasyon_id: str
 
-
-# ---------------- Personnel ----------------
 class Personnel(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=new_id)
@@ -82,10 +70,10 @@ class Personnel(BaseModel):
     aciklama: str = ""
     fazla_mesai: bool = False
     surucu_tercihi: SurucuTercihi = "yok"
-    nobet_hedef_1_15: Optional[int] = None   # sadece "surucu" rolü
+    surucu_yapabilir: bool = False
+    nobet_hedef_1_15: Optional[int] = None
     nobet_hedef_16_son: Optional[int] = None
     created_at: str = Field(default_factory=now_iso)
-
 
 class PersonnelCreate(BaseModel):
     ad_soyad: str
@@ -95,9 +83,9 @@ class PersonnelCreate(BaseModel):
     aciklama: str = ""
     fazla_mesai: bool = False
     surucu_tercihi: SurucuTercihi = "yok"
+    surucu_yapabilir: bool = False
     nobet_hedef_1_15: Optional[int] = None
     nobet_hedef_16_son: Optional[int] = None
-
 
 class PersonnelUpdate(BaseModel):
     ad_soyad: Optional[str] = None
@@ -107,81 +95,68 @@ class PersonnelUpdate(BaseModel):
     aciklama: Optional[str] = None
     fazla_mesai: Optional[bool] = None
     surucu_tercihi: Optional[SurucuTercihi] = None
+    surucu_yapabilir: Optional[bool] = None
     nobet_hedef_1_15: Optional[int] = None
     nobet_hedef_16_son: Optional[int] = None
 
-
-# ---------------- Leave / Request ----------------
 class LeaveRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=new_id)
     istasyon_id: Optional[str] = None
     personel_id: str
-    tarih: str  # YYYY-MM-DD
+    tarih: str
     durum: LeaveStatus
-
 
 class LeaveBulkSet(BaseModel):
     personel_id: str
     tarihler: List[str]
-    durum: Optional[LeaveStatus] = None  # None means clear
+    durum: Optional[LeaveStatus] = None
 
-
-# ---------------- Assignments / Schedule ----------------
 class Assignment(BaseModel):
-    """A single task assigned to a personnel on a given date."""
     model_config = ConfigDict(extra="ignore")
-    tarih: str  # YYYY-MM-DD
+    tarih: str
     personel_id: str
     gorev: TaskKind
-    baslangic: str  # HH:MM
-    bitis: str      # HH:MM (may be next day for 24h & night)
-    saat: int       # duration in hours (12 or 24)
-
+    baslangic: str
+    bitis: str
+    saat: int
 
 class ShiftDay(BaseModel):
     tarih: str
     saglikci_1: Optional[str] = None
     saglikci_2: Optional[str] = None
-    surucu_gunduz: Optional[str] = None  # 09-21
-    surucu_gece: Optional[str] = None    # 21-09
-    surucu_24: Optional[str] = None      # 24h driver (fills both slots)
-
+    surucu_gunduz: Optional[str] = None
+    surucu_gece: Optional[str] = None
+    surucu_24: Optional[str] = None
 
 class MonthlySchedule(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=new_id)
     yil: int
-    ay: int  # 1-12
+    ay: int
     gunler: List[ShiftDay] = []
     assignments: List[Assignment] = []
-    ihlaller: List[str] = []  # rule violation messages
+    ihlaller: List[str] = []
     created_at: str = Field(default_factory=now_iso)
     updated_at: str = Field(default_factory=now_iso)
-
 
 class GenerateRequest(BaseModel):
     yil: int
     ay: int
-    ignore_leave_ids: List[str] = []  # leave request ids to ignore
-    max_gun_asiri: int = 3  # max shifts for gün aşırı çalışma sağlıkçı
-    rastgele_yoksay: bool = False  # çakışan istekleri rastgele göz ardı et
-    saglikci_max_nobet_araligi: Optional[int] = None  # None ise istasyon ayarından okunur
-
+    ignore_leave_ids: List[str] = []
+    max_gun_asiri: int = 3
+    rastgele_yoksay: bool = False
+    saglikci_max_nobet_araligi: Optional[int] = None
 
 class SchedulerSettings(BaseModel):
     saglikci_max_nobet_araligi: int = 4
 
-
 class SchedulerSettingsUpdate(BaseModel):
     saglikci_max_nobet_araligi: int
 
-
-# ---------------- Holidays ----------------
 class HolidayCreate(BaseModel):
     tarih: str
     ad: str
-
 
 class Holiday(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -190,31 +165,24 @@ class Holiday(BaseModel):
     ad: str
     kaynak: Literal["resmi", "ozel"] = "ozel"
 
-
-# ---------------- Carryover (ay geçişi) ----------------
 class CarryoverSet(BaseModel):
     gunler: List[ShiftDay]
 
-
-# ---------------- Templates ----------------
 class TemplatePersonnel(BaseModel):
     personel_id: str
     ad_soyad: str
     aktif: bool
     hedef_saat: int
 
-
 class TemplatePref(BaseModel):
     personel_id: str
-    haftanin_gunu: int  # 0=Pzt ... 6=Paz
-
+    haftanin_gunu: int
 
 class TemplateCreate(BaseModel):
     ad: str
     aciklama: str = ""
     kaynak_yil: Optional[int] = None
     kaynak_ay: Optional[int] = None
-
 
 class Template(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -225,15 +193,13 @@ class Template(BaseModel):
     tercihler: List[TemplatePref] = []
     created_at: str = Field(default_factory=now_iso)
 
-
 class TemplateApply(BaseModel):
     yil: int
     ay: int
-
 
 class ManualUpdateRequest(BaseModel):
     yil: int
     ay: int
     tarih: str
     slot: Literal["saglikci_1", "saglikci_2", "surucu_gunduz", "surucu_gece", "surucu_24"]
-    personel_id: Optional[str] = None  # None to clear
+    personel_id: Optional[str] = None
