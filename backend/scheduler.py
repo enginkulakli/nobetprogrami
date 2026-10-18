@@ -425,12 +425,8 @@ def _pick_best(ctx: SchedulerContext, candidates: List[str], d: date, task: str,
     if not valid:
         return None
 
-    # Sağlıkçı nöbet aralığı kuralı: bugün atanmazsa sınırı aşacak personel önceliklidir.
-    urgent = [pid for pid in valid if ctx.requires_gap_assignment_today(pid, d)]
-    if urgent:
-        valid = urgent
-
-    # Sağlıkçı görevleri için zorunlu saat + fazla mesai tercih adaleti.
+    # Sağlıkçı görevlerinde önce herkesin zorunlu mesai açığını kapat.
+    # Nöbet aralığı önceliği, mesaisi zaten dolmuş birini tekrar seçtirmemeli.
     if task == "saglikci_24":
         health_valid = [pid for pid in valid if ctx.is_health_like(pid)]
         if health_valid:
@@ -451,7 +447,27 @@ def _pick_best(ctx: SchedulerContext, candidates: List[str], d: date, task: str,
                     min_ot = min(ctx.overtime_shift_count[pid] for pid in overtime_candidates)
                     valid = [pid for pid in overtime_candidates if ctx.overtime_shift_count[pid] == min_ot]
 
-    valid.sort(key=lambda pid: ctx.score_candidate(pid, d, task))
+    # Mesai açığı olan uygun adaylar seçildikten sonra, nöbet aralığı sınırına
+    # yaklaşanları kendi grubu içinde öne al.
+    urgent = [pid for pid in valid if ctx.requires_gap_assignment_today(pid, d)]
+    if urgent:
+        valid = urgent
+
+    def balance_key(pid):
+        day_count = ctx.gunduz_count.get(pid, 0)
+        night_count = ctx.gece_count.get(pid, 0)
+        shift24 = ctx.surucu_24_count.get(pid, 0)
+        total_driver = day_count + night_count + shift24
+        projected_day = day_count + (1 if task == "surucu_gunduz" else 0)
+        projected_night = night_count + (1 if task == "surucu_gece" else 0)
+        projected_imbalance = abs(projected_day - projected_night)
+        return (
+            total_driver,
+            projected_imbalance,
+            ctx.score_candidate(pid, d, task),
+        )
+
+    valid.sort(key=balance_key)
     return valid[0]
 
 
