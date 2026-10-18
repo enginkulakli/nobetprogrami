@@ -434,15 +434,6 @@ def _pick_best(ctx: SchedulerContext, candidates: List[str], d: date, task: str,
     if urgent:
         valid = urgent
 
-    # Nöbet istemeyen kişi, aynı görev için kurallara uygun başka aday varsa seçilmez.
-    # Bu tercih mutlak yasak değildir: aksi halde vardiya boş kalabilir.
-    willing = [
-        pid for pid in valid
-        if ctx.leaves.get(pid, {}).get(d.isoformat()) != "nobet_istemiyor"
-    ]
-    if willing:
-        valid = willing
-
     # Sağlıkçı görevlerinde önce herkesin zorunlu mesai açığını kapat.
     # Bu öncelik yalnızca yukarıdaki tercih ve nöbet aralığı grubunun içinde uygulanır.
     if task == "saglikci_24":
@@ -464,6 +455,15 @@ def _pick_best(ctx: SchedulerContext, candidates: List[str], d: date, task: str,
                     # Fazla mesai istemeyen personele yalnızca son çarede yaz.
                     min_ot = min(ctx.overtime_shift_count[pid] for pid in overtime_candidates)
                     valid = [pid for pid in overtime_candidates if ctx.overtime_shift_count[pid] == min_ot]
+
+    # Zorunlu mesai/arıza aralığı öncelikleri uygulandıktan sonra tercihi değerlendir.
+    # Böylece zorunlu aylık saatler sırf tercih yüzünden eksik kalmaz.
+    willing = [
+        pid for pid in valid
+        if ctx.leaves.get(pid, {}).get(d.isoformat()) != "nobet_istemiyor"
+    ]
+    if willing:
+        valid = willing
 
     def balance_key(pid):
         day_count = ctx.gunduz_count.get(pid, 0)
@@ -695,7 +695,8 @@ def _monthly_plan_quality(schedule: MonthlySchedule, errors: List[str], personne
         if tur in ("paramedik", "att", "saglikci", "saglikci_surucu"):
             target = max(0, int((targets or {}).get(pid, p.get("hedef_saat", 0) or 0)))
             if hours[pid] < target:
-                score += (target - hours[pid]) * 3.0
+                # Zorunlu saat açığı, tercih ihlalinden ve küçük denge farklarından ağır basmalı.
+                score += (target - hours[pid]) * 15.0
             else:
                 score += (hours[pid] - target) * 0.8
         assigned = sorted(set(dates[pid]))
