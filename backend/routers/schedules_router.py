@@ -144,11 +144,20 @@ async def manual_update(req: ManualUpdateRequest, istasyon_id: str = Depends(cur
         selected = next((p for p in personnel if p["id"] == req.personel_id), None)
         if not selected:
             raise HTTPException(404, "Personel bulunamadı")
-        required_role = {"saglikci_1": "paramedik", "saglikci_2": "att",
-                         "surucu_gunduz": "surucu", "surucu_gece": "surucu",
-                         "surucu_24": "surucu"}[req.slot]
-        if selected.get("personel_turu") != required_role:
-            raise HTTPException(400, f"Bu görev için {required_role} türünde personel seçilmelidir")
+        if req.slot in ("surucu_gunduz", "surucu_gece", "surucu_24"):
+            driver_eligible = (
+                selected.get("personel_turu") == "surucu"
+                or (
+                    selected.get("personel_turu") in ("paramedik", "att")
+                    and bool(selected.get("surucu_yapabilir", False))
+                )
+            )
+            if not driver_eligible:
+                raise HTTPException(400, "Sürücü nöbeti için sürücü kadrosunda veya sürücü yetkisi açık paramedik/ATT seçilmelidir")
+        else:
+            required_role = {"saglikci_1": "paramedik", "saglikci_2": "att"}[req.slot]
+            if selected.get("personel_turu") != required_role:
+                raise HTTPException(400, f"Bu görev için {required_role} türünde personel seçilmelidir")
         tinfo = await build_targets(req.yil, req.ay, personnel, leaves)
         targets = {k: t["normal_hedef"] for k, t in tinfo.items()}
         ok, msg = validate_manual_assignment(
@@ -253,12 +262,16 @@ async def slot_candidates(req: CandidatesRequest, istasyon_id: str = Depends(cur
     settings = await _get_scheduler_settings(istasyon_id)
     saglikci_gap = int(settings["saglikci_max_nobet_araligi"])
     roles = {"saglikci_1": ("paramedik",), "saglikci_2": ("att",),
-             "surucu_gunduz": ("surucu",), "surucu_gece": ("surucu",),
-             "surucu_24": ("surucu",)}[req.slot]
+             "surucu_gunduz": ("surucu", "paramedik", "att"),
+             "surucu_gece": ("surucu", "paramedik", "att"),
+             "surucu_24": ("surucu", "paramedik", "att")}[req.slot]
     out = []
     for p in personnel:
         if not p.get("aktif", True) or p["personel_turu"] not in roles:
             continue
+        if req.slot in ("surucu_gunduz", "surucu_gece", "surucu_24"):
+            if p.get("personel_turu") in ("paramedik", "att") and not p.get("surucu_yapabilir", False):
+                continue
         ok, msg = validate_manual_assignment(
             doc,
             req.tarih,
