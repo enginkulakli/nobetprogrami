@@ -98,6 +98,7 @@ class PersonnelUpdate(BaseModel):
     fazla_mesai: Optional[bool] = None
     surucu_tercihi: Optional[SurucuTercihi] = None
     surucu_yapabilir: Optional[bool] = None
+    renk: Optional[str] = None
     nobet_hedef_1_15: Optional[int] = None
     nobet_hedef_16_son: Optional[int] = None
 
