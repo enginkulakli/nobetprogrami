@@ -10,6 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Building2, Trash2, Pencil, UserPlus, Plus, ShieldAlert } from "lucide-react";
 import { toast } from "sonner";
+import { APP_VERSION, APP_BUILD_TIME } from "@/generatedVersion";
 
 export default function Users() {
   const { refreshStations } = useAuth();
@@ -94,6 +95,11 @@ export default function Users() {
       <div>
         <div className="text-xs font-bold uppercase tracking-[0.2em] text-muted-foreground">Yönetim</div>
         <h1 className="font-heading text-3xl sm:text-4xl font-extrabold tracking-tight mt-1">Kullanıcılar &amp; İstasyonlar</h1>
+        <p className="mt-2 text-xs text-muted-foreground" data-testid="app-version">
+          Site sürümü: <span className="font-semibold text-foreground">{APP_VERSION}</span>
+          <span className="mx-2">·</span>
+          Derleme: {APP_BUILD_TIME} UTC
+        </p>
       </div>
 
       {hasOrphans && (
