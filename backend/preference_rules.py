@@ -29,10 +29,14 @@ def _same_driver_streak(ctx, pid, task, d):
 
 
 def _preferred_candidates(ctx, candidates, d):
-    # Tercihler aday havuzunu daraltmamalı: aksi hâlde mesai hedefi olan
-    # uygun personel, başka biri tercih bildirdi diye hiç görev alamayabilir.
-    # score_candidate zaten "nöbet istemiyorum" tercihini puan cezasıyla uygular.
-    return list(candidates)
+    # Uygun alternatif varsa "nöbet istemiyorum" diyenleri geriye bırak.
+    # Tercih mutlak yasak değildir; son uygun grup yalnızca istemeyenlerden
+    # oluşuyorsa vardiyanın boş kalmaması için onlar da değerlendirilebilir.
+    willing = [
+        pid for pid in candidates
+        if ctx.leaves.get(pid, {}).get(d.isoformat()) != "nobet_istemiyor"
+    ]
+    return willing or list(candidates)
 
 
 def install_preference_rules() -> None:
@@ -45,13 +49,9 @@ def install_preference_rules() -> None:
     original_can_assign = scheduler.SchedulerContext.can_assign
 
     def pick_best(ctx, candidates, d, task, max_gun_asiri):
-        # Normal mesaiyi tamamlama önceliklidir; nöbet tercihi bunu engellememeli.
-        pool = list(candidates)
-        if task == "saglikci_24":
-            due = [pid for pid in pool if ctx.remaining_mandatory_hours(pid) > 0]
-            if due:
-                pool = due
-        return original_pick_best(ctx, _preferred_candidates(ctx, pool, d), d, task, max_gun_asiri)
+        # Ortak scheduler önce gerçek uygunluğu, nöbet aralığını ve tercihleri
+        # değerlendirir; burada aday havuzunu önceden daraltıp uygun kişileri kaybetmeyiz.
+        return original_pick_best(ctx, list(candidates), d, task, max_gun_asiri)
 
     def can_assign(ctx, pid, d, task, max_gun_asiri=3):
         ok, msg = original_can_assign(ctx, pid, d, task, max_gun_asiri)
@@ -89,9 +89,7 @@ def install_preference_rules() -> None:
         if max_deficit > 0:
             valid = [pid for pid in valid if deficits.get(pid, 0) == max_deficit]
 
-        preferred = _preferred_candidates(ctx, valid, d)
-        if preferred:
-            valid = preferred
+        valid = _preferred_candidates(ctx, valid, d)
 
         def balance_key(pid):
             day_count, night_count, shift24 = _driver_counts(ctx, pid)

@@ -252,12 +252,18 @@ async def slot_candidates(req: CandidatesRequest, istasyon_id: str = Depends(cur
     targets = {k: t["normal_hedef"] for k, t in tinfo.items()}
     settings = await _get_scheduler_settings(istasyon_id)
     saglikci_gap = int(settings["saglikci_max_nobet_araligi"])
+    driver_slots = ("surucu_gunduz", "surucu_gece", "surucu_24")
     roles = {"saglikci_1": ("paramedik",), "saglikci_2": ("att",),
-             "surucu_gunduz": ("surucu",), "surucu_gece": ("surucu",),
-             "surucu_24": ("surucu",)}[req.slot]
+             "surucu_gunduz": ("surucu", "saglikci_surucu", "paramedik", "att"),
+             "surucu_gece": ("surucu", "saglikci_surucu", "paramedik", "att"),
+             "surucu_24": ("surucu", "saglikci_surucu", "paramedik", "att")}[req.slot]
     out = []
     for p in personnel:
         if not p.get("aktif", True) or p["personel_turu"] not in roles:
+            continue
+        # Sürücü aday listesi, otomatik atamayla aynı yetki kuralını kullanmalı:
+        # paramedik/ATT ancak surucu_yapabilir açıksa sürücü olabilir.
+        if req.slot in driver_slots and p["personel_turu"] in ("paramedik", "att") and not p.get("surucu_yapabilir", False):
             continue
         ok, msg = validate_manual_assignment(
             doc,
