@@ -706,7 +706,7 @@ def generate_schedule(
         if quality < best_score:
             best = (candidate, candidate_errors)
             best_score = quality
-        if quality <= 0:
+        if quality == 0:
             break
     return best if best is not None else _generate_schedule_once(
         yil, ay, personnel, leaves, max_gun_asiri, holidays,
