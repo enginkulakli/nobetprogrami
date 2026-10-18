@@ -107,7 +107,11 @@ def _pick_best_driver_12(
     if max_deficit > 0:
         valid = [pid for pid in valid if deficits.get(pid, 0) == max_deficit]
 
-    # Önce toplam sürücü nöbetini ve gündüz/gece dağılımını dengele,
+    wanted = [pid for pid in valid if ctx.leaves.get(pid, {}).get(d.isoformat()) == "nobet_istiyor"]
+    if wanted:
+        valid = wanted
+
+    # Önce gündüz/gece dengesini, ardından toplam sürücü nöbeti sayısını dengele,
     # ardından mesai ve diğer yumuşak kuralları uygula.
     def driver_balance_key(pid):
         day_count = ctx.gunduz_count.get(pid, 0)
@@ -115,7 +119,7 @@ def _pick_best_driver_12(
         projected_day = day_count + (1 if task == "surucu_gunduz" else 0)
         projected_night = night_count + (1 if task == "surucu_gece" else 0)
         total_driver = day_count + night_count + ctx.surucu_24_count.get(pid, 0)
-        return (total_driver, abs(projected_day - projected_night), ctx.score_candidate(pid, d, task))
+        return (abs(projected_day - projected_night), total_driver, ctx.score_candidate(pid, d, task))
 
     valid.sort(key=driver_balance_key)
     return valid[0]
