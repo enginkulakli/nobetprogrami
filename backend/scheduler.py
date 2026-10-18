@@ -686,8 +686,11 @@ def _monthly_plan_quality(schedule: MonthlySchedule, errors: List[str], personne
         dates[pid].append(date.fromisoformat(assignment.tarih))
         if assignment.gorev in DRIVER_TASKS:
             driver_counts[pid] += 1
-        if leaves.get(pid, {}).get(assignment.tarih) == "nobet_istemiyor":
+        preference = leaves.get(pid, {}).get(assignment.tarih)
+        if preference == "nobet_istemiyor":
             score += 100.0
+        elif preference == "nobet_istiyor":
+            score -= 12.0
 
     # Zorunlu sağlıkçı saatleri tamamlanırken fazla mesaiyi ve sürücü görevlerini de dengeler.
     for pid, p in by_id.items():
