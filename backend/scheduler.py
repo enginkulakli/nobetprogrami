@@ -400,9 +400,12 @@ class SchedulerContext:
             score += self.gunduz_count[pid] * 1.5
         elif task == "surucu_gece":
             score += self.gece_count[pid] * 1.5
-        # 5) nöbet istemiyor tercihi
-        if self.leaves.get(pid, {}).get(d.isoformat()) == "nobet_istemiyor":
-            score += 20.0
+        # 5) nöbet tercihleri: istemiyorum ancak uygun alternatif yoksa kabul edilir.
+        status = self.leaves.get(pid, {}).get(d.isoformat())
+        if status == "nobet_istemiyor":
+            score += 100.0
+        elif status == "nobet_istiyor":
+            score -= 12.0
         # 6) 24h sürücü: tercih etmeyenler için soft ceza
         if task == "surucu_24" and not prefers_24_driver:
             score += 15.0
@@ -425,8 +428,23 @@ def _pick_best(ctx: SchedulerContext, candidates: List[str], d: date, task: str,
     if not valid:
         return None
 
+    # Önce nöbet aralığı kritik seviyeye gelen uygun personeli koru.
+    # Günlük açgözlü seçim, bu önceliği sona bırakırsa ay sonunda uzun boşluklar üretir.
+    urgent = [pid for pid in valid if ctx.requires_gap_assignment_today(pid, d)]
+    if urgent:
+        valid = urgent
+
+    # Nöbet istemeyen kişi, aynı görev için kurallara uygun başka aday varsa seçilmez.
+    # Bu tercih mutlak yasak değildir: aksi halde vardiya boş kalabilir.
+    willing = [
+        pid for pid in valid
+        if ctx.leaves.get(pid, {}).get(d.isoformat()) != "nobet_istemiyor"
+    ]
+    if willing:
+        valid = willing
+
     # Sağlıkçı görevlerinde önce herkesin zorunlu mesai açığını kapat.
-    # Nöbet aralığı önceliği, mesaisi zaten dolmuş birini tekrar seçtirmemeli.
+    # Bu öncelik yalnızca yukarıdaki tercih ve nöbet aralığı grubunun içinde uygulanır.
     if task == "saglikci_24":
         health_valid = [pid for pid in valid if ctx.is_health_like(pid)]
         if health_valid:
@@ -446,12 +464,6 @@ def _pick_best(ctx: SchedulerContext, candidates: List[str], d: date, task: str,
                     # Fazla mesai istemeyen personele yalnızca son çarede yaz.
                     min_ot = min(ctx.overtime_shift_count[pid] for pid in overtime_candidates)
                     valid = [pid for pid in overtime_candidates if ctx.overtime_shift_count[pid] == min_ot]
-
-    # Mesai açığı olan uygun adaylar seçildikten sonra, nöbet aralığı sınırına
-    # yaklaşanları kendi grubu içinde öne al.
-    urgent = [pid for pid in valid if ctx.requires_gap_assignment_today(pid, d)]
-    if urgent:
-        valid = urgent
 
     def balance_key(pid):
         day_count = ctx.gunduz_count.get(pid, 0)
