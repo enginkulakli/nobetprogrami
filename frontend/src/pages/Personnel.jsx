@@ -12,7 +12,22 @@ import { Trash2, Pencil, UserPlus, Clock } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
 
-const PERSONNEL_COLORS = ["#2563EB", "#DC2626", "#059669", "#9333EA", "#D97706", "#0891B2", "#DB2777", "#4F46E5", "#65A30D", "#EA580C", "#0F766E", "#7C3AED"];
+const colorForIndex = (index) => {
+  const hue = (index * 137.508) % 360;
+  const saturation = 0.72;
+  const lightness = 0.42;
+  const chroma = (1 - Math.abs(2 * lightness - 1)) * saturation;
+  const x = chroma * (1 - Math.abs((hue / 60) % 2 - 1));
+  const m = lightness - chroma / 2;
+  let rgb;
+  if (hue < 60) rgb = [chroma, x, 0];
+  else if (hue < 120) rgb = [x, chroma, 0];
+  else if (hue < 180) rgb = [0, chroma, x];
+  else if (hue < 240) rgb = [0, x, chroma];
+  else if (hue < 300) rgb = [x, 0, chroma];
+  else rgb = [chroma, 0, x];
+  return "#" + rgb.map((v) => Math.round((v + m) * 255).toString(16).padStart(2, "0")).join("");
+};
 const emptyForm = { ad_soyad: "", personel_turu: "paramedik", aktif: true, hedef_saat: 180, aciklama: "", fazla_mesai: false, surucu_tercihi: "yok", surucu_yapabilir: false, renk: "#2563EB" };
 const TERCIH_LABELS = { "12": "12s sürücü", "24": "24s sürücü", "24_saat_surucu": "24 Saat Sürücü", yok: "Tercih yok" };
 
@@ -28,7 +43,7 @@ export default function Personnel() {
   };
   useEffect(() => { load(); }, []);
 
-  const openNew = () => { setForm({ ...emptyForm, renk: PERSONNEL_COLORS[list.length % PERSONNEL_COLORS.length] }); setEditingId(null); setOpen(true); };
+  const openNew = () => { setForm({ ...emptyForm, renk: colorForIndex(list.length) }); setEditingId(null); setOpen(true); };
   const openEdit = (p) => {
     setForm({ ad_soyad: p.ad_soyad, personel_turu: p.personel_turu, aktif: p.aktif, hedef_saat: p.hedef_saat, aciklama: p.aciklama || "",
       fazla_mesai: !!p.fazla_mesai, surucu_tercihi: p.surucu_tercihi || "yok", surucu_yapabilir: !!p.surucu_yapabilir, renk: p.renk || "#2563EB" });
