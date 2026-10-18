@@ -97,15 +97,11 @@ def _pick_best_driver_12(
     if not valid:
         return None
 
-    # İstekler önce uygulanır: uygun isteyen varsa onu, yoksa istemeyen
-    # olmayan uygun personeli değerlendir. Bu filtre her iki vardiya için de geçerli.
-    wanted = [pid for pid in valid if ctx.leaves.get(pid, {}).get(d.isoformat()) == "nobet_istiyor"]
-    if wanted:
-        valid = wanted
-    else:
-        willing = [pid for pid in valid if ctx.leaves.get(pid, {}).get(d.isoformat()) != "nobet_istemiyor"]
-        if willing:
-            valid = willing
+    # Uygun bir alternatif varsa istemeyenleri önce ele; ardından sürücü
+    # minimumlarını, en son isteyenlerin önceliğini uygula.
+    willing = [pid for pid in valid if ctx.leaves.get(pid, {}).get(d.isoformat()) != "nobet_istemiyor"]
+    if willing:
+        valid = willing
 
     max_deficit = max((deficits.get(pid, 0) for pid in valid), default=0)
     if max_deficit > 0:
@@ -462,15 +458,11 @@ def _pick_best(ctx: SchedulerContext, candidates: List[str], d: date, task: str,
     if not valid:
         return None
 
-    # Tercihler aday havuzu daraltılmadan uygulanır. Böylece mesai açığı
-    # olan istemeyen bir kişi, uygun ve nöbet isteyen bir kişinin önüne geçmez.
-    wanted = [pid for pid in valid if ctx.leaves.get(pid, {}).get(d.isoformat()) == "nobet_istiyor"]
-    if wanted:
-        valid = wanted
-    else:
-        willing = [pid for pid in valid if ctx.leaves.get(pid, {}).get(d.isoformat()) != "nobet_istemiyor"]
-        if willing:
-            valid = willing
+    # Önce "nöbet istemiyorum" diyenleri ancak uygun bir alternatif varsa
+    # dışarıda bırak. Zorunlu mesai açığı bundan sonra değerlendirilir.
+    willing = [pid for pid in valid if ctx.leaves.get(pid, {}).get(d.isoformat()) != "nobet_istemiyor"]
+    if willing:
+        valid = willing
 
     # Sağlıkçı görevlerinde önce herkesin zorunlu mesai açığını kapat.
     # Nöbet aralığı önceliği, mesaisi zaten dolmuş birini tekrar seçtirmemeli.
@@ -501,11 +493,14 @@ def _pick_best(ctx: SchedulerContext, candidates: List[str], d: date, task: str,
                     min_ot = min(ctx.overtime_shift_count[pid] for pid in overtime_candidates)
                     valid = [pid for pid in overtime_candidates if ctx.overtime_shift_count[pid] == min_ot]
 
-    # Mesai açığı olan uygun adaylar seçildikten sonra, nöbet aralığı sınırına
-    # yaklaşanları kendi grubu içinde öne al.
+    # Mesai açığı ve kritik nöbet aralığı öncelikleri korunduktan sonra
+    # uygun isteyen personeli kendi aday grubunda öne al.
     urgent = [pid for pid in valid if ctx.requires_gap_assignment_today(pid, d)]
     if urgent:
         valid = urgent
+    wanted = [pid for pid in valid if ctx.leaves.get(pid, {}).get(d.isoformat()) == "nobet_istiyor"]
+    if wanted:
+        valid = wanted
 
     def balance_key(pid):
         day_count = ctx.gunduz_count.get(pid, 0)
