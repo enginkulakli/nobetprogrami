@@ -455,8 +455,15 @@ def _pick_best(ctx: SchedulerContext, candidates: List[str], d: date, task: str,
         if health_valid:
             mandatory_due = [pid for pid in health_valid if ctx.remaining_mandatory_hours(pid) > 0]
             if mandatory_due:
-                max_remaining = max(ctx.remaining_mandatory_hours(pid) for pid in mandatory_due)
-                valid = [pid for pid in mandatory_due if ctx.remaining_mandatory_hours(pid) == max_remaining]
+                # Mutlak mesai açığına göre seçim yapmak, hedef saati yüksek kişiyi
+                # gereğinden fazla nöbete sürükleyebilir. Aylık hedefe oranla en az
+                # ilerlemiş personeli seçerek dağılımı dengeleriz.
+                def target_progress(pid):
+                    target = max(1, ctx.mandatory_target_hours(pid))
+                    projected = ctx.hours.get(pid, 0) + TASKS[task]["hours"]
+                    return (projected / target, ctx.hours.get(pid, 0), -ctx.remaining_mandatory_hours(pid))
+                best_progress = min(target_progress(pid) for pid in mandatory_due)
+                valid = [pid for pid in mandatory_due if target_progress(pid) == best_progress]
             else:
                 overtime_candidates = [pid for pid in health_valid if ctx.assignment_creates_overtime(pid, task)]
                 wanting = [pid for pid in overtime_candidates if ctx.personnel[pid].get("fazla_mesai", False)]
@@ -760,7 +767,8 @@ def generate_schedule(
     """Birden fazla tam ay planlar, denetler ve en iyi puanlı sonucu seçer."""
     best = None
     best_score = float("inf")
-    for _attempt in range(16):
+    # More independent full-month candidates improve the chance of finding a balanced valid plan.
+    for _attempt in range(64):
         candidate, candidate_errors = _generate_schedule_once(
             yil, ay, personnel, leaves, max_gun_asiri, holidays,
             carryover_days, targets, saglikci_max_nobet_araligi,
