@@ -304,8 +304,8 @@ export default function Schedule() {
                   <TableRow>
                     <TableHead className="w-40">Tarih</TableHead>
                     <TableHead className="w-16">Gün</TableHead>
-                    <TableHead>Sağlıkçı 1</TableHead>
-                    <TableHead>Sağlıkçı 2</TableHead>
+                    <TableHead>Paramedik</TableHead>
+                    <TableHead>ATT</TableHead>
                     <TableHead>Sürücü 09-21</TableHead>
                     <TableHead>Sürücü 21-09</TableHead>
                     <TableHead>24s Sürücü</TableHead>
@@ -340,6 +340,7 @@ export default function Schedule() {
                             slot={s}
                             personId={day[s.key]}
                             personName={pmap[day[s.key]]?.ad_soyad}
+                            personColor={pmap[day[s.key]]?.renk}
                             selectedPersonId={selectedPid}
                             violation={violations[`${day.tarih}|${s.key}`]}
                             has24Driver={!!day.surucu_24}
@@ -457,7 +458,7 @@ function ViolationBadge({ violation, tarih, slot, onSwap }) {
   );
 }
 
-function SlotCell({ slot, personId, personName, selectedPersonId, has24Driver, onEdit, onSwap, violation }) {
+function SlotCell({ slot, personId, personName, personColor, selectedPersonId, has24Driver, onEdit, onSwap, violation }) {
   const isSelectedPerson = !!selectedPersonId && personId === selectedPersonId;
   const cellTone = isSelectedPerson
     ? "bg-red-600 text-white"
@@ -478,12 +479,12 @@ function SlotCell({ slot, personId, personName, selectedPersonId, has24Driver, o
     );
   }
   return (
-    <TableCell className={cellTone} data-selected-person={isSelectedPerson ? "true" : "false"}>
+    <TableCell className={cellTone} style={!isSelectedPerson && personColor ? { borderLeft: `3px solid ${personColor}` } : undefined} data-selected-person={isSelectedPerson ? "true" : "false"}>
       <button
         onClick={onEdit}
         className={`group inline-flex items-center gap-1.5 text-sm mr-1.5 ${isSelectedPerson ? "text-white hover:text-white" : "hover:text-primary"}`}
       >
-        <span>{personName || <span className={isSelectedPerson ? "italic text-white/90" : "text-muted-foreground italic"}>Boş</span>}</span>
+        <span style={{ color: isSelectedPerson ? "#FFFFFF" : (personColor || undefined), fontWeight: personColor ? 600 : undefined }}>{personName || <span className={isSelectedPerson ? "italic text-white/90" : "text-muted-foreground italic"}>Boş</span>}</span>
         <Pencil className={`w-3 h-3 opacity-0 group-hover:opacity-100 ${isSelectedPerson ? "text-white" : ""}`} />
       </button>
       <ViolationBadge violation={violation} tarih={violation?.tarih} slot={slot.key} onSwap={onSwap} />
