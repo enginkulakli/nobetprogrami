@@ -93,6 +93,15 @@ def _pick_best_driver_12(
     if max_deficit > 0:
         valid = [pid for pid in valid if deficits.get(pid, 0) == max_deficit]
 
+    # Zorunlu saat ve kritik nöbet aralığı öncelikleri korunduktan sonra,
+    # uygun alternatif varsa nöbet istemeyenleri aday havuzundan çıkar.
+    willing = [
+        pid for pid in valid
+        if ctx.leaves.get(pid, {}).get(d.isoformat()) != "nobet_istemiyor"
+    ]
+    if willing:
+        valid = willing
+
     valid.sort(key=lambda pid: ctx.score_candidate(pid, d, task))
     return valid[0]
 
@@ -395,9 +404,12 @@ class SchedulerContext:
             score += self.gunduz_count[pid] * 1.5
         elif task == "surucu_gece":
             score += self.gece_count[pid] * 1.5
-        # 5) nöbet istemiyor tercihi
-        if self.leaves.get(pid, {}).get(d.isoformat()) == "nobet_istemiyor":
-            score += 20.0
+        # 5) nöbet tercihleri: istemiyorum güçlü ceza, istiyorum hafif avantaj.
+        status = self.leaves.get(pid, {}).get(d.isoformat())
+        if status == "nobet_istemiyor":
+            score += 100.0
+        elif status == "nobet_istiyor":
+            score -= 12.0
         # 6) 24h sürücü: tercih etmeyenler için soft ceza
         if task == "surucu_24" and not prefers_24_driver:
             score += 15.0
@@ -450,7 +462,7 @@ def _pick_best(ctx: SchedulerContext, candidates: List[str], d: date, task: str,
     return valid[0]
 
 
-def generate_schedule(
+def _generate_schedule_once(
     yil: int,
     ay: int,
     personnel: List[dict],
@@ -604,6 +616,102 @@ def generate_schedule(
 
     schedule.ihlaller = errors[:]
     return schedule, errors
+
+
+def _monthly_plan_quality(schedule: MonthlySchedule, errors: List[str], personnel: List[dict],
+                          leaves: Dict[str, Dict[str, str]], targets: Optional[Dict[str, int]],
+                          saglikci_max_nobet_araligi: int) -> float:
+    """Tam aylık planları görev doluluğu, hedef saat, tercih ve adalete göre puanlar."""
+    score = 0.0
+    slots = tuple(SLOT_TO_TASK)
+    for day in schedule.gunler:
+        for slot in slots:
+            if not getattr(day, slot, None):
+                score += 10000.0
+
+    for err in errors:
+        if "tam gün boşluk var" in err:
+            score += 250.0
+        elif "zorunlu mesai saati tamamlanamadı" in err:
+            score += 180.0
+        elif "atanamadı" in err or "yetersiz" in err:
+            score += 10000.0
+        else:
+            score += 1200.0
+
+    active = {p["id"]: p for p in personnel if p.get("aktif", True)}
+    hours = {pid: 0 for pid in active}
+    dates = {pid: [] for pid in active}
+    driver_counts = {pid: 0 for pid in active}
+    for assignment in schedule.assignments:
+        pid = assignment.personel_id
+        if pid not in active:
+            continue
+        hours[pid] += int(assignment.saat)
+        dates[pid].append(date.fromisoformat(assignment.tarih))
+        if assignment.gorev in DRIVER_TASKS:
+            driver_counts[pid] += 1
+        preference = leaves.get(pid, {}).get(assignment.tarih)
+        if preference == "nobet_istemiyor":
+            score += 100.0
+        elif preference == "nobet_istiyor":
+            score -= 12.0
+
+    for pid, p in active.items():
+        if p.get("personel_turu") in ("saglikci", "saglikci_surucu"):
+            target = max(0, int((targets or {}).get(pid, p.get("hedef_saat", 0) or 0)))
+            if hours[pid] < target:
+                score += (target - hours[pid]) * 15.0
+            else:
+                score += (hours[pid] - target) * 0.8
+            assigned = sorted(set(dates[pid]))
+            for prev, cur in zip(assigned, assigned[1:]):
+                gap = (cur - prev).days - 1
+                if gap > saglikci_max_nobet_araligi:
+                    score += 250.0 * (gap - saglikci_max_nobet_araligi)
+
+    eligible_drivers = [
+        pid for pid, p in active.items()
+        if p.get("personel_turu") in ("surucu", "saglikci_surucu")
+    ]
+    if eligible_drivers:
+        avg = sum(driver_counts[pid] for pid in eligible_drivers) / len(eligible_drivers)
+        score += sum((driver_counts[pid] - avg) ** 2 for pid in eligible_drivers) * 2.0
+    return score
+
+
+def generate_schedule(
+    yil: int,
+    ay: int,
+    personnel: List[dict],
+    leaves: Dict[str, Dict[str, str]],
+    max_gun_asiri: int = 3,
+    holidays: Optional[set] = None,
+    carryover_days: Optional[List[dict]] = None,
+    targets: Optional[Dict[str, int]] = None,
+    saglikci_max_nobet_araligi: int = 4,
+) -> Tuple[MonthlySchedule, List[str]]:
+    """Birden fazla tam ay planlar, denetler ve en iyi puanlı sonucu seçer."""
+    best = None
+    best_score = float("inf")
+    for _attempt in range(16):
+        candidate, candidate_errors = _generate_schedule_once(
+            yil, ay, personnel, leaves, max_gun_asiri, holidays,
+            carryover_days, targets, saglikci_max_nobet_araligi,
+        )
+        quality = _monthly_plan_quality(
+            candidate, candidate_errors, personnel, leaves, targets,
+            saglikci_max_nobet_araligi,
+        )
+        if quality < best_score:
+            best = (candidate, candidate_errors)
+            best_score = quality
+        if quality <= 0:
+            break
+    return best if best is not None else _generate_schedule_once(
+        yil, ay, personnel, leaves, max_gun_asiri, holidays,
+        carryover_days, targets, saglikci_max_nobet_araligi,
+    )
 
 
 def validate_manual_assignment(
