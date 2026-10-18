@@ -71,6 +71,7 @@ class Personnel(BaseModel):
     fazla_mesai: bool = False
     surucu_tercihi: SurucuTercihi = "yok"
     surucu_yapabilir: bool = False
+    renk: str = "#DCEBFA"
     nobet_hedef_1_15: Optional[int] = None
     nobet_hedef_16_son: Optional[int] = None
     created_at: str = Field(default_factory=now_iso)
@@ -84,6 +85,7 @@ class PersonnelCreate(BaseModel):
     fazla_mesai: bool = False
     surucu_tercihi: SurucuTercihi = "yok"
     surucu_yapabilir: bool = False
+    renk: str = "#DCEBFA"
     nobet_hedef_1_15: Optional[int] = None
     nobet_hedef_16_son: Optional[int] = None
 
