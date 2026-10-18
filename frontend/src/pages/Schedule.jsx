@@ -84,24 +84,49 @@ export default function Schedule() {
 
   const generate = async (extra = {}) => {
     setLoading(true);
+    setErrors([]);
     try {
       const r = await api.post("/schedule/generate", { yil, ay, ...extra });
-      setSchedule(r.data.schedule);
-      setErrors(r.data.errors || []);
-      setConflicts(r.data.conflicts || []);
-      setHint(r.data.ipucu || null);
-      loadViolations();
+      setErrors(r.data?.errors || []);
+      setConflicts(r.data?.conflicts || []);
+      setHint(r.data?.ipucu || null);
       setRefreshKey((k) => k + 1);
-      if (r.data.success) {
+
+      // Generate response ile tablo state'ini doğrudan değiştirme.
+      // Kaydedilen programı GET endpoint'inden al ve beklenmeyen veri şeklinde
+      // tablo render'ının tamamen çökmesini önle.
+      const saved = await api.get(`/schedule/${yil}/${ay}`);
+      if (saved.data?.exists && Array.isArray(saved.data.gunler)) {
+        setSchedule(saved.data);
+        setErrors(saved.data.ihlaller || r.data?.errors || []);
+      } else {
+        setSchedule(null);
+        setErrors([...(r.data?.errors || []), "Program kaydedildi ancak tablo verisi beklenen biçimde gelmedi. Sayfayı yenileyip tekrar deneyin."]);
+      }
+
+      try {
+        await loadViolations();
+      } catch {
+        setViolations({});
+      }
+
+      if (r.data?.success) {
         setConflictOpen(false);
         toast.success(r.data.ignored?.length ? `Liste oluşturuldu (${r.data.ignored.length} istek göz ardı edildi)` : "Nöbet listesi oluşturuldu");
       } else {
-        toast.warning(`${r.data.errors.length} sorun tespit edildi`);
+        toast.warning(`${(r.data?.errors || []).length} sorun tespit edildi`);
         setConflictOpen(true);
       }
     } catch (e) {
-      toast.error("Oluşturulamadı: " + (e.response?.data?.detail || e.message));
-    } finally { setLoading(false); }
+      toast.error("Oluşturulamadı: " + formatApiError(e));
+      // Mevcut kayıt varsa hata sonrası da göster.
+      try {
+        const saved = await api.get(`/schedule/${yil}/${ay}`);
+        if (saved.data?.exists && Array.isArray(saved.data.gunler)) setSchedule(saved.data);
+      } catch {}
+    } finally {
+      setLoading(false);
+    }
   };
 
   const doApplyTemplate = async () => {
