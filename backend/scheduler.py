@@ -53,7 +53,7 @@ def _build_mandatory_driver_minimums(personnel: List[dict]) -> Dict[int, Dict[st
     """Kişi bazında dönemlik zorunlu minimum sürücü nöbet sayıları."""
     minimums: Dict[int, Dict[str, int]] = {1: {}, 2: {}}
     for p in personnel:
-        if not p.get("aktif", True):
+        if not p.get("aktif", True) or p.get("personel_turu") != "surucu":
             continue
         h1 = p.get("nobet_hedef_1_15")
         h2 = p.get("nobet_hedef_16_son")
@@ -97,17 +97,31 @@ def _pick_best_driver_12(
     if not valid:
         return None
 
+    # İstekler önce uygulanır: uygun isteyen varsa onu, yoksa istemeyen
+    # olmayan uygun personeli değerlendir. Bu filtre her iki vardiya için de geçerli.
+    wanted = [pid for pid in valid if ctx.leaves.get(pid, {}).get(d.isoformat()) == "nobet_istiyor"]
+    if wanted:
+        valid = wanted
+    else:
+        willing = [pid for pid in valid if ctx.leaves.get(pid, {}).get(d.isoformat()) != "nobet_istemiyor"]
+        if willing:
+            valid = willing
+
     max_deficit = max((deficits.get(pid, 0) for pid in valid), default=0)
     if max_deficit > 0:
         valid = [pid for pid in valid if deficits.get(pid, 0) == max_deficit]
 
-    # Aynı gün için nöbet isteyen uygun personeli, zorunlu minimumlar korunduktan
-    # sonra önceliklendir. Uygun değilse diğer adaylara düş.
-    wanted = [pid for pid in valid if ctx.leaves.get(pid, {}).get(d.isoformat()) == "nobet_istiyor"]
-    if wanted:
-        valid = wanted
+    # Önce toplam sürücü nöbetini ve gündüz/gece dağılımını dengele,
+    # ardından mesai ve diğer yumuşak kuralları uygula.
+    def driver_balance_key(pid):
+        day_count = ctx.gunduz_count.get(pid, 0)
+        night_count = ctx.gece_count.get(pid, 0)
+        projected_day = day_count + (1 if task == "surucu_gunduz" else 0)
+        projected_night = night_count + (1 if task == "surucu_gece" else 0)
+        total_driver = day_count + night_count + ctx.surucu_24_count.get(pid, 0)
+        return (total_driver, abs(projected_day - projected_night), ctx.score_candidate(pid, d, task))
 
-    valid.sort(key=lambda pid: ctx.score_candidate(pid, d, task))
+    valid.sort(key=driver_balance_key)
     return valid[0]
 
 
@@ -448,6 +462,16 @@ def _pick_best(ctx: SchedulerContext, candidates: List[str], d: date, task: str,
     if not valid:
         return None
 
+    # Tercihler aday havuzu daraltılmadan uygulanır. Böylece mesai açığı
+    # olan istemeyen bir kişi, uygun ve nöbet isteyen bir kişinin önüne geçmez.
+    wanted = [pid for pid in valid if ctx.leaves.get(pid, {}).get(d.isoformat()) == "nobet_istiyor"]
+    if wanted:
+        valid = wanted
+    else:
+        willing = [pid for pid in valid if ctx.leaves.get(pid, {}).get(d.isoformat()) != "nobet_istemiyor"]
+        if willing:
+            valid = willing
+
     # Sağlıkçı görevlerinde önce herkesin zorunlu mesai açığını kapat.
     # Nöbet aralığı önceliği, mesaisi zaten dolmuş birini tekrar seçtirmemeli.
     if task == "saglikci_24":
@@ -477,26 +501,11 @@ def _pick_best(ctx: SchedulerContext, candidates: List[str], d: date, task: str,
                     min_ot = min(ctx.overtime_shift_count[pid] for pid in overtime_candidates)
                     valid = [pid for pid in overtime_candidates if ctx.overtime_shift_count[pid] == min_ot]
 
-    # Zorunlu saat ve kritik nöbet aralığı öncelikleri korunduktan sonra,
-    # uygun alternatif varsa nöbet istemeyenleri aday havuzundan çıkar.
-    willing = [
-        pid for pid in valid
-        if ctx.leaves.get(pid, {}).get(d.isoformat()) != "nobet_istemiyor"
-    ]
-    if willing:
-        valid = willing
-
     # Mesai açığı olan uygun adaylar seçildikten sonra, nöbet aralığı sınırına
     # yaklaşanları kendi grubu içinde öne al.
     urgent = [pid for pid in valid if ctx.requires_gap_assignment_today(pid, d)]
     if urgent:
         valid = urgent
-
-    # Seçilen tarihte nöbet isteyen biri uygunsa onu öne al; istemeyenlere
-    # yalnızca uygun isteyen aday kalmadığında düş.
-    wanted = [pid for pid in valid if ctx.leaves.get(pid, {}).get(d.isoformat()) == "nobet_istiyor"]
-    if wanted:
-        valid = wanted
 
     def balance_key(pid):
         day_count = ctx.gunduz_count.get(pid, 0)
@@ -556,14 +565,15 @@ def _generate_schedule_once(
     if legacy_mode:
         paramedik_ids = list(legacy_health_ids)
         att_ids = list(legacy_health_ids)
-        surucu_12_ids = surucu_ids + [pid for pid in legacy_health_ids
-                                      if ctx.personnel[pid]["personel_turu"] == "saglikci_surucu"]
-        surucu_24_ids = [pid for pid in legacy_health_ids
-                         if ctx.personnel[pid]["personel_turu"] == "saglikci_surucu"]
+        # Eski personel kayıtlarında da sağlık personelini otomatik sürücü
+        # havuzuna ekleme. İstenirse uygun personel elle atanabilir.
+        surucu_12_ids = list(surucu_ids)
+        surucu_24_ids = list(surucu_ids)
     else:
-        # Paramedik/ATT yalnızca profillerinde sürücü yetkisi açıldıysa sürücü havuzuna girer.
-        surucu_12_ids = [pid for pid, p in ctx.personnel.items() if _is_driver_eligible(p)]
-        surucu_24_ids = list(surucu_12_ids)
+        # Otomatik üretimde yalnızca personel türü "sürücü" olanlar kullanılır.
+        # Sürücü yetkili paramedik/ATT, kullanıcı tarafından elle atanabilir.
+        surucu_12_ids = list(surucu_ids)
+        surucu_24_ids = list(surucu_ids)
 
     if not paramedik_ids:
         errors.append("Paramedik sayısı yetersiz (en az 1 aktif paramedik gerekli)")
