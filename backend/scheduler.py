@@ -700,6 +700,22 @@ def _generate_schedule_once(
                 f"{p.get('ad_soyad', pid)}'in zorunlu mesai saati tamamlanamadı ({actual_hours}/{target_hours} saat)"
             )
 
+    # Bir rolde günlük yalnızca tek 24 saatlik görev varsa, o rolün aylık
+    # toplam kapasitesi gün sayısı × 24 saattir. Hedeflerin toplamı bunu
+    # aşıyorsa hiçbir algoritma herkesin mesaisini tamamlayamaz; sebebi açıkla.
+    if not legacy_mode:
+        for role_name, role_ids in (("Paramedik", paramedik_ids), ("ATT", att_ids)):
+            target_total = sum(
+                max(0, int((targets or {}).get(pid, ctx.personnel[pid].get("hedef_saat", 0) or 0)))
+                for pid in role_ids
+            )
+            capacity = len(days) * 24
+            if target_total > capacity:
+                errors.append(
+                    f"{role_name} mesai hedefleri toplamı {target_total} saat; bu ay tek günlük 24 saatlik sütunun kapasitesi "
+                    f"{capacity} saat. Tüm personelin zorunlu mesaisini bu kurallarla tamamlamak matematiksel olarak mümkün değil."
+                )
+
     schedule.ihlaller = errors[:]
     return schedule, errors
 
