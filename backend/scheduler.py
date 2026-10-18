@@ -575,33 +575,44 @@ def _generate_schedule_once(
     if errors:
         return schedule, errors
 
+    # Önce rol bazlı sağlıkçı listelerini oluştur; sürücü atamalarını ay sonunda ayrı turda yap.
+    # Böylece her rolün aylık dağılımı kendi havuzunda değerlendirilir ve aynı kişi
+    # aynı gün birden fazla göreve yazılmaz (can_assign bunu tüm turlarda denetler).
+    day_by_date = {d: ShiftDay(tarih=d.isoformat()) for d in days}
+    schedule.gunler = [day_by_date[d] for d in days]
+
+    # Pass 1: Paramedikler için tüm ayı planla.
     for d in days:
-        day = ShiftDay(tarih=d.isoformat())
-
-        # Step 1: bir paramedik ve bir ATT ata
-        s1 = _pick_best(ctx, paramedik_ids, d, "saglikci_24", max_gun_asiri)
-        if s1 is None:
+        day = day_by_date[d]
+        pid = _pick_best(ctx, paramedik_ids, d, "saglikci_24", max_gun_asiri)
+        if pid is None:
             errors.append(f"{d.isoformat()}: Paramedik atanamadı")
-        else:
-            ctx.assign(s1, d, "saglikci_24")
-            day.saglikci_1 = s1
-            schedule.assignments.append(Assignment(
-                tarih=d.isoformat(), personel_id=s1, gorev="saglikci_24",
-                baslangic="08:00", bitis="08:00", saat=24))
+            continue
+        ctx.assign(pid, d, "saglikci_24")
+        day.saglikci_1 = pid
+        schedule.assignments.append(Assignment(
+            tarih=d.isoformat(), personel_id=pid, gorev="saglikci_24",
+            baslangic="08:00", bitis="08:00", saat=24))
 
-        s2_pool = [p for p in att_ids if p != s1]
-        s2 = _pick_best(ctx, s2_pool, d, "saglikci_24", max_gun_asiri)
-        if s2 is None:
+    # Pass 2: ATT'leri ayrı değerlendir. Paramedik atamaları artık bilindiği için
+    # aynı gün aynı kişinin ikinci kez seçilmesi engellenir.
+    for d in days:
+        day = day_by_date[d]
+        pool = [pid for pid in att_ids if pid != day.saglikci_1]
+        pid = _pick_best(ctx, pool, d, "saglikci_24", max_gun_asiri)
+        if pid is None:
             errors.append(f"{d.isoformat()}: ATT atanamadı")
-        else:
-            ctx.assign(s2, d, "saglikci_24")
-            day.saglikci_2 = s2
-            schedule.assignments.append(Assignment(
-                tarih=d.isoformat(), personel_id=s2, gorev="saglikci_24",
-                baslangic="08:00", bitis="08:00", saat=24))
+            continue
+        ctx.assign(pid, d, "saglikci_24")
+        day.saglikci_2 = pid
+        schedule.assignments.append(Assignment(
+            tarih=d.isoformat(), personel_id=pid, gorev="saglikci_24",
+            baslangic="08:00", bitis="08:00", saat=24))
 
-        # Step 2: sürücü ata
-        used_pids = {s1, s2}
+    # Pass 3: Sürücü listesini ayrı değerlendir.
+    for d in days:
+        day = day_by_date[d]
+        used_pids = {day.saglikci_1, day.saglikci_2}
         period_idx = _period_index_for_day(d)
         deficits = _driver_minimum_deficits(ctx, mandatory_driver_minimums, period_idx)
         pending_minimums = bool(deficits)
@@ -613,7 +624,7 @@ def _generate_schedule_once(
         gece = _pick_best_driver_12(ctx, pool_n, d, "surucu_gece", max_gun_asiri, deficits)
 
         if not pending_minimums:
-            # Önceki davranış: 24s tercihli Sağlıkçı+Sürücü önce dener.
+            # 24 saat sürücü tercih eden yetkili personel varsa önce onu dene.
             pool_24_pref = [
                 p for p in surucu_24_ids
                 if p not in used_pids and _is_24h_driver_preference(ctx.personnel[p].get("surucu_tercihi", "yok"))
@@ -625,7 +636,6 @@ def _generate_schedule_once(
                 schedule.assignments.append(Assignment(
                     tarih=d.isoformat(), personel_id=s24_pref, gorev="surucu_24",
                     baslangic="08:00", bitis="08:00", saat=24))
-                schedule.gunler.append(day)
                 continue
 
         if gunduz and gece:
@@ -640,7 +650,7 @@ def _generate_schedule_once(
                 tarih=d.isoformat(), personel_id=gece, gorev="surucu_gece",
                 baslangic="21:00", bitis="09:00", saat=12))
         else:
-            # 12h ikilisi kurulamıyorsa (hard kısıtlar nedeniyle) 24h fallback her zaman serbest.
+            # 12h ikilisi kurulamıyorsa 24h sürücü alternatifi dene.
             pool_24 = [p for p in surucu_24_ids if p not in used_pids]
             s24 = _pick_best(ctx, pool_24, d, "surucu_24", max_gun_asiri)
             if s24:
@@ -651,8 +661,6 @@ def _generate_schedule_once(
                     baslangic="08:00", bitis="08:00", saat=24))
             else:
                 errors.append(f"{d.isoformat()}: Sürücü atanamadı (12h yetersiz ve 24h alternatifi yok)")
-
-        schedule.gunler.append(day)
 
     # Step 3: Sağlıkçı ve Sağlıkçı+Sürücü için maksimum nöbet aralığı kontrolü
     for pid, p in ctx.personnel.items():
