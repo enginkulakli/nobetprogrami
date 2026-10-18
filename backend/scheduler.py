@@ -101,6 +101,12 @@ def _pick_best_driver_12(
     if max_deficit > 0:
         valid = [pid for pid in valid if deficits.get(pid, 0) == max_deficit]
 
+    # Aynı gün için nöbet isteyen uygun personeli, zorunlu minimumlar korunduktan
+    # sonra önceliklendir. Uygun değilse diğer adaylara düş.
+    wanted = [pid for pid in valid if ctx.leaves.get(pid, {}).get(d.isoformat()) == "nobet_istiyor"]
+    if wanted:
+        valid = wanted
+
     valid.sort(key=lambda pid: ctx.score_candidate(pid, d, task))
     return valid[0]
 
@@ -395,11 +401,25 @@ class SchedulerContext:
         # 3b) resmi tatil dengesi
         if d.isoformat() in self.holidays:
             score += self.holiday_shifts[pid] * 4.0
-        # 4) gündüz/gece dengesi
-        if task == "surucu_gunduz":
-            score += self.gunduz_count[pid] * 1.5
-        elif task == "surucu_gece":
-            score += self.gece_count[pid] * 1.5
+        # 4) gündüz/gece dengesi ve üç aynı vardiyadan sonra ters vardiya tercihi.
+        if task in ("surucu_gunduz", "surucu_gece"):
+            same_task_streak = 0
+            for offset in range(1, 4):
+                prior_day = d - timedelta(days=offset)
+                prior_tasks = [
+                    t for (dd, t, _s, _e) in self.pid_assignments[pid]
+                    if dd == prior_day and t in ("surucu_gunduz", "surucu_gece")
+                ]
+                if task in prior_tasks:
+                    same_task_streak += 1
+                else:
+                    break
+            if same_task_streak >= 3:
+                score += 1000.0
+            if task == "surucu_gunduz":
+                score += self.gunduz_count[pid] * 1.5
+            else:
+                score += self.gece_count[pid] * 1.5
         # 5) nöbet tercihleri: istemiyorum güçlü ceza, istiyorum hafif avantaj.
         status = self.leaves.get(pid, {}).get(d.isoformat())
         if status == "nobet_istemiyor":
@@ -464,6 +484,12 @@ def _pick_best(ctx: SchedulerContext, candidates: List[str], d: date, task: str,
     urgent = [pid for pid in valid if ctx.requires_gap_assignment_today(pid, d)]
     if urgent:
         valid = urgent
+
+    # Seçilen tarihte nöbet isteyen biri uygunsa onu öne al; istemeyenlere
+    # yalnızca uygun isteyen aday kalmadığında düş.
+    wanted = [pid for pid in valid if ctx.leaves.get(pid, {}).get(d.isoformat()) == "nobet_istiyor"]
+    if wanted:
+        valid = wanted
 
     def balance_key(pid):
         day_count = ctx.gunduz_count.get(pid, 0)
