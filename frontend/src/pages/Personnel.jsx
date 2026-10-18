@@ -12,7 +12,8 @@ import { Trash2, Pencil, UserPlus, Clock } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
 
-const emptyForm = { ad_soyad: "", personel_turu: "paramedik", aktif: true, hedef_saat: 180, aciklama: "", fazla_mesai: false, surucu_tercihi: "yok", surucu_yapabilir: false };
+const PERSONNEL_COLORS = ["#2563EB", "#DC2626", "#059669", "#9333EA", "#D97706", "#0891B2", "#DB2777", "#4F46E5", "#65A30D", "#EA580C", "#0F766E", "#7C3AED"];
+const emptyForm = { ad_soyad: "", personel_turu: "paramedik", aktif: true, hedef_saat: 180, aciklama: "", fazla_mesai: false, surucu_tercihi: "yok", surucu_yapabilir: false, renk: "#2563EB" };
 const TERCIH_LABELS = { "12": "12s sürücü", "24": "24s sürücü", "24_saat_surucu": "24 Saat Sürücü", yok: "Tercih yok" };
 
 export default function Personnel() {
@@ -27,10 +28,10 @@ export default function Personnel() {
   };
   useEffect(() => { load(); }, []);
 
-  const openNew = () => { setForm(emptyForm); setEditingId(null); setOpen(true); };
+  const openNew = () => { setForm({ ...emptyForm, renk: PERSONNEL_COLORS[list.length % PERSONNEL_COLORS.length] }); setEditingId(null); setOpen(true); };
   const openEdit = (p) => {
     setForm({ ad_soyad: p.ad_soyad, personel_turu: p.personel_turu, aktif: p.aktif, hedef_saat: p.hedef_saat, aciklama: p.aciklama || "",
-      fazla_mesai: !!p.fazla_mesai, surucu_tercihi: p.surucu_tercihi || "yok", surucu_yapabilir: !!p.surucu_yapabilir });
+      fazla_mesai: !!p.fazla_mesai, surucu_tercihi: p.surucu_tercihi || "yok", surucu_yapabilir: !!p.surucu_yapabilir, renk: p.renk || "#2563EB" });
     setEditingId(p.id);
     setOpen(true);
   };
@@ -121,7 +122,7 @@ export default function Personnel() {
                 )}
                 {list.map((p) => (
                   <TableRow key={p.id} data-testid={`personnel-row-${p.id}`}>
-                    <TableCell className="font-medium">{p.ad_soyad}</TableCell>
+                    <TableCell className="font-medium"><span className="inline-flex items-center gap-2"><span className="inline-block w-3 h-3 rounded-full border border-black/10" style={{ backgroundColor: p.renk || "#DCEBFA" }} /><span style={{ color: p.renk || "#2563EB" }}>{p.ad_soyad}</span></span></TableCell>
                     <TableCell>
                       <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-secondary text-secondary-foreground text-xs font-semibold">
                         {PERSONNEL_LABELS[p.personel_turu]}
@@ -159,6 +160,13 @@ export default function Personnel() {
             <div>
               <Label>Ad Soyad</Label>
               <Input value={form.ad_soyad} onChange={(e) => setForm({ ...form, ad_soyad: e.target.value })} data-testid="input-ad-soyad" />
+            </div>
+            <div>
+              <Label>Personel Rengi</Label>
+              <div className="flex items-center gap-3 mt-1">
+                <Input type="color" value={form.renk || "#2563EB"} onChange={(e) => setForm({ ...form, renk: e.target.value })} className="h-10 w-16 p-1 cursor-pointer" data-testid="input-personnel-color" />
+                <span className="text-sm text-muted-foreground">Listede bu rengin tonuyla gösterilir.</span>
+              </div>
             </div>
             <div>
               <Label>Personel Türü</Label>
